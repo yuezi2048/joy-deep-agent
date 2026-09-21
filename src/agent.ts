@@ -110,10 +110,10 @@ export class DWAgent {
 
     ## 行为准则
     - 每次回复说明你正在做什么（Planning → 执行 → 输出）
-    - 需要写文件时，使用以下格式：
-    \`\`\`filename:文件名.md
-    文件内容
-    \`\`\`
+    - 需要写文件时，使用以下格式（用 file 标签，禁止用 \`\`\` 围栏包裹文件内容）：
+    <file path="文件名.md">
+    文件完整内容，内容里可以自由包含 \`\`\` 代码块，原样输出即可
+    </file>
     - 如果超出能力范围，直接回复“抱歉，我无法完成这个请求。”
     - 使用中文回复
 
@@ -220,18 +220,49 @@ export class DWAgent {
     };
   }
 
-  // 解析AI回复的写入指令：```filename:文件名.md ```
+  // 从AI回复中提取要写入的文件块
+  // 主协议：<file path="文件名.md"> ... </file>，内容里的 ``` 不会干扰解析
+  // 兼容旧协议：```filename:文件名.md ... ```
+  private extractFileBlocks(
+    content: string,
+  ): Array<{ filename: string; body: string }> {
+    const blocks: Array<{ filename: string; body: string }> = [];
+    let match: RegExpExecArray | null;
+
+    const tagBlockRegex =
+      /<file\s+(?:path|name|filename)=["']([^"']+)["']\s*>\s*\n?([\s\S]*?)\n?\s*<\/file>/g;
+    while ((match = tagBlockRegex.exec(content)) !== null) {
+      blocks.push({ filename: match[1].trim(), body: match[2].trim() });
+    }
+    if (blocks.length > 0) return blocks.filter((b) => b.filename);
+
+    // 模型漏写 </file> 时的兜底：一直取到回复结束
+    const openTagRegex =
+      /<file\s+(?:path|name|filename)=["']([^"']+)["']\s*>\s*\n?([\s\S]*)$/g;
+    while ((match = openTagRegex.exec(content)) !== null) {
+      blocks.push({ filename: match[1].trim(), body: match[2].trim() });
+    }
+    if (blocks.length > 0) return blocks.filter((b) => b.filename);
+
+    // 旧围栏协议：结束围栏的反引号数量必须不短于开头，否则会被内层 ``` 提前截断
+    const fenceBlockRegex =
+      /(?:^|\n)(`{3,})(?:filename:|file:)[ \t]*([^\n]*)\n([\s\S]*?)(?:\n\1`*[ \t]*(?=\n|$)|$)/g;
+    while ((match = fenceBlockRegex.exec(content)) !== null) {
+      if (match[2].trim()) {
+        blocks.push({ filename: match[2].trim(), body: match[3].trim() });
+      }
+    }
+    return blocks.filter((b) => b.filename);
+  }
+
+  // 解析AI回复的写入指令并落盘
   private async processFileOperations(content: string): Promise<string[]> {
     if (!this.sandbox) return [];
     const filesWritten: string[] = [];
-    // 围栏长度自适应：AI 为了在文档里嵌套 ``` 代码块，会把外层围栏写成 ```` 或更长，
-    // 因此这里捕获开头的反引号数量，并要求结束围栏不短于它，否则会被内层 ``` 提前截断
-    const fileBlockRegex =
-      /(?:^|\n)(`{3,})(?:filename:|file:)[ \t]*([^\n]*)\n([\s\S]*?)(?:\n\1`*[ \t]*(?=\n|$)|$)/g;
-    let match;
-    while ((match = fileBlockRegex.exec(content)) !== null) {
-      const filename = match[2].trim();
-      const fileContent = match[3].trim();
+
+    const blocks = this.extractFileBlocks(content);
+    for (const { filename, body } of blocks) {
+      const fileContent = body.trim();
 
       try {
         const approved = await hitlCheckpoint(
