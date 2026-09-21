@@ -62,7 +62,8 @@ export class DWAgent {
         autoApprove: false,
       },
       systemPrompt: config.systemPrompt ?? "You are a helpful assistant.",
-      maxTokens: config.maxTokens ?? 4096,
+      maxTokens:
+        config.maxTokens ?? Number(process.env.DEEPSEEK_MAX_TOKENS || 8192),
     };
     if (!this.config.apiKey) {
       throw new Error("缺少 DEEPSEEK_API_KEY，请在 .env 文件中配置");
@@ -148,6 +149,7 @@ export class DWAgent {
     });
 
     const assistantContent = response.choices[0].message.content ?? "";
+    this.warnIfTruncated(response.choices[0].finish_reason);
     this.conversationHistory.push({
       role: "assistant",
       content: assistantContent,
@@ -183,6 +185,7 @@ export class DWAgent {
     console.log("\n" + "─".repeat(50));
 
     let fullContent = "";
+    let finishReason: string | null = null;
 
     const stream = await this.client.chat.completions.create({
       model: this.config.model,
@@ -200,12 +203,14 @@ export class DWAgent {
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta?.content ?? "";
+      finishReason = chunk.choices[0]?.finish_reason ?? finishReason;
       if (delta) {
         process.stdout.write(delta);
         fullContent += delta;
       }
     }
 
+    this.warnIfTruncated(finishReason);
     console.log("\n" + "─".repeat(50));
     this.conversationHistory.push({ role: "assistant", content: fullContent });
     const filesWritten = await this.processFileOperations(fullContent);
@@ -281,6 +286,14 @@ export class DWAgent {
       }
     }
     return filesWritten;
+  }
+
+  // 输出达到 max_tokens 上限时给出提示，避免把模型截断误判成解析丢内容
+  private warnIfTruncated(finishReason: string | null | undefined): void {
+    if (finishReason !== "length") return;
+    console.warn(
+      `\n⚠️  [Agent] 输出达到 max_tokens=${this.config.maxTokens} 被截断，文件内容可能不完整，可调大 DEEPSEEK_MAX_TOKENS`,
+    );
   }
 
   // 手动在沙箱内写文件
