@@ -45,7 +45,7 @@ export class DWAgent {
   constructor(config: AgentConfig) {
     this.config = {
       name: config.name,
-      baseURL: config.baseURL ?? (process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com/v1"),
+      baseURL: config.baseURL ?? (process.env.BASE_URL || "https://api.deepseek.com/v1"),
       model: config.model ?? (process.env.DEEPSEEK_MODEL || "deepseek-flash"),
       apiKey: config.apiKey ?? process.env.DEEPSEEK_API_KEY ?? "",
       temperature:

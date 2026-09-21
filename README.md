@@ -59,7 +59,7 @@ HITL 自建了 readline，它 `close()` 时会把共享的 `process.stdin` 置�
 - 结构：`src/agent.ts`（提示词 + 协议解析 + HITL + 沙箱调用）｜`src/sandbox.ts`（路径隔离/输出目录）｜`src/skill-loader.ts`｜`src/hitl.ts`｜`src/index.ts`（REPL 入口）
 - 写文件协议：`<file path="文件名.md">内容</file>`，旧版 `` ```filename: `` 仍兼容
 - 输出目录：`output/`；`output-<时间戳>.md` 是兜底产物
-- 环境变量：`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`、`DEEPSEEK_TEMPERATURE`、`DEEPSEEK_MAX_TOKENS`、`TAVILY_API_KEY`
+- 环境变量：`DEEPSEEK_API_KEY`、`BASE_URL`、`DEEPSEEK_MODEL`、`DEEPSEEK_TEMPERATURE`、`DEEPSEEK_MAX_TOKENS`、`TAVILY_API_KEY`（代码与 `.env` 命名一致）
 - 提交对照：`ea62afa` 基线 → `fb611bc` 围栏解析 → `8270550` 标签协议 → `4ff218f` 必须落盘 → `13d8679` token 上限 → `6fa1cb6` 入口兜底 → `09990c9` readline 冲突 → `e97e2c4` 多智能体协议 → `f6fb5d4` 约束收窄
 
 ## 六、零散语法坑
@@ -71,4 +71,3 @@ HITL 自建了 readline，它 `close()` 时会把共享的 `process.stdin` 置�
 
 - [ ] `demo-search` 的兜底命名是否统一成时间戳
 - [ ] 远端仓库与推送
-- [ ] `.env` 里写的是 `BASE_URL`，代码读的是 `DEEPSEEK_BASE_URL`，名字不一致（当前默认值相同所以没暴露）
