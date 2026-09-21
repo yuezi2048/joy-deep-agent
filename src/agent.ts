@@ -224,11 +224,14 @@ export class DWAgent {
   private async processFileOperations(content: string): Promise<string[]> {
     if (!this.sandbox) return [];
     const filesWritten: string[] = [];
-    const fileBlockRegex = /```(?:filename:|file:)([^\n]+)\n([\s\S]*?)```/g;
+    // 围栏长度自适应：AI 为了在文档里嵌套 ``` 代码块，会把外层围栏写成 ```` 或更长，
+    // 因此这里捕获开头的反引号数量，并要求结束围栏不短于它，否则会被内层 ``` 提前截断
+    const fileBlockRegex =
+      /(?:^|\n)(`{3,})(?:filename:|file:)[ \t]*([^\n]*)\n([\s\S]*?)(?:\n\1`*[ \t]*(?=\n|$)|$)/g;
     let match;
     while ((match = fileBlockRegex.exec(content)) !== null) {
-      const filename = match[1].trim();
-      const fileContent = match[2].trim();
+      const filename = match[2].trim();
+      const fileContent = match[3].trim();
 
       try {
         const approved = await hitlCheckpoint(
