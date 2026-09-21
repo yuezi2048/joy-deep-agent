@@ -9,6 +9,9 @@ import readline from "readline";
 import { createDWAgent } from "./agent.js";
 
 async function main() {
+  // 提前声明，供 HITL 复用同一个 readline，避免两个 readline 抢 stdin
+  let ask: (prompt: string) => Promise<string>;
+
   // 创建并初始化 Agent
   const agent = await createDWAgent({
     name: "大伟 OpenCodex",
@@ -21,6 +24,7 @@ async function main() {
     hitl: {
       enabled: true, // 开启 HITL，生产使用建议保持开启
       autoApprove: false, // 不自动同意，遇到高风险操作手动确认
+      ask: (question) => ask(question),
     },
     systemPrompt: `
 你是大伟 OpenCodex，一个专业的前端 + AI 全栈智能体，由 DeepSeek 驱动。
@@ -59,7 +63,7 @@ async function main() {
   });
 
   // 封装为 Promise，方便 async/await 使用
-  const ask = (prompt: string): Promise<string> =>
+  ask = (prompt: string): Promise<string> =>
     new Promise((resolve) => rl.question(prompt, resolve));
 
   // 对话主循环

@@ -25,6 +25,8 @@ const HIGH_RISK_KEYWORDS = [
   "强制删除",
 ];
 
+export type HitlPrompt = (question: string) => Promise<string>;
+
 export interface HitlConfig {
   // 是否开启 HITL 默认true
   enabled?: boolean;
@@ -32,6 +34,10 @@ export interface HitlConfig {
   extraKeywords?: string[];
   // 自动同意的选项，生产环境不开
   autoApprove?: boolean;
+  // 复用宿主程序（如 REPL）的输入接口
+  // 默认自己新建 readline，但同一个 stdin 上存在两个 readline 时，
+  // 后关闭的那个会把共享的 stdin pause 掉，宿主就再也读不到输入了
+  ask?: HitlPrompt;
 }
 
 // 检测操作内容是否包含高风险的关键词
@@ -46,19 +52,25 @@ export function isHighRiskOperation(
 }
 
 // 等待用户在终端输入确认
-async function waitForUserConfirmation(prompt: string): Promise<boolean> {
-  const rl = readLine.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
+async function waitForUserConfirmation(
+  prompt: string,
+  ask?: HitlPrompt,
+): Promise<boolean> {
+  const answer = ask
+    ? await ask(prompt)
+    : await new Promise<string>((resolve) => {
+        const rl = readLine.createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        });
+        rl.question(prompt, (input) => {
+          rl.close();
+          resolve(input);
+        });
+      });
 
-  return new Promise<boolean>((resolve) => {
-    rl.question(prompt, (answer) => {
-      rl.close();
-      const normalizedAnswer = answer.trim().toLowerCase();
-      resolve(normalizedAnswer === "y" || normalizedAnswer === "yes");
-    });
-  });
+  const normalizedAnswer = answer.trim().toLowerCase();
+  return normalizedAnswer === "y" || normalizedAnswer === "yes";
 }
 
 // hitl 检查点：高风险操作前调用，返回是否继续执行
@@ -89,7 +101,10 @@ export async function hitlCheckpoint(
     return true
   }
 
-  const approved = await waitForUserConfirmation('\n请确认是否继续执行？（y/n）');
+  const approved = await waitForUserConfirmation(
+    '\n请确认是否继续执行？（y/n）',
+    config.ask,
+  );
   if (approved) {
     console.log('[HITL] 用户同意，继续执行...\n')
   } else {
