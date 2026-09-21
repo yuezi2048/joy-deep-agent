@@ -101,7 +101,14 @@ async function main() {
 
     // 正常对话，流式输出
     process.stdout.write("\n🤖 大伟：\n");
-    await agent.invokeStream(trimmed);
+    const result = await agent.invokeStream(trimmed);
+
+    // Fallback：AI 没按 <file> 格式写文件，但回复里有代码块时，自动保存
+    if (result.filesWritten.length === 0 && result.content.includes("```")) {
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
+      agent.getSandbox()?.writeFile(`output-${timestamp}.md`, result.content);
+      console.log(`\n💾 已自动保存到 output/output-${timestamp}.md`);
+    }
   }
 }
 
