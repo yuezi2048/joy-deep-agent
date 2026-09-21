@@ -6,7 +6,7 @@
  */
 
 import "dotenv/config";
-import { createDWAgent, type DWAgent } from "./agent.js";
+import { createDWAgent, type AgentResult, type DWAgent } from "./agent.js";
 import { TavilySearch } from "./tools/tavily-search.js";
 
 // ─── 子智能体 A：技术研究员 ────────────────────────────────
@@ -64,7 +64,7 @@ async function writerAgent(
   agent: DWAgent,
   sections: Record<string, string>,
   title: string,
-): Promise<string> {
+): Promise<AgentResult> {
   console.log(`\n[Writer] 开始整合报告：${title}`);
 
   const sectionsText = Object.entries(sections)
@@ -86,13 +86,13 @@ ${sectionsText}
 4. 使用 Markdown 格式
 
 将完整报告写入文件：
-\`\`\`filename:tech-research-report.md
+<file path="tech-research-report.md">
 （在这里填写完整报告内容）
-\`\`\`
+</file>
   `);
 
   console.log("[Writer] 报告整合完成");
-  return reportContent.content;
+  return reportContent;
 }
 
 // ─── 主智能体编排 ─────────────────────────────────────────
@@ -202,7 +202,7 @@ Deep Agent 底层基于 LangGraph，面向通用型智能体场景，开箱即�
   console.log("Step 3：Writer 整合报告阶段");
   console.log("=".repeat(50));
 
-  await writerAgent(
+  const report = await writerAgent(
     mainAgent,
     {
       "框架选型与对比": frameworkAnalysis,
@@ -210,6 +210,15 @@ Deep Agent 底层基于 LangGraph，面向通用型智能体场景，开箱即�
     },
     reportTitle,
   );
+
+  // Fallback：AI 没按 <file> 格式写文件，但回复里有代码块时，自动保存
+  let reportFile = "tech-research-report.md";
+  if (report.filesWritten.length === 0 && report.content.includes("```")) {
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
+    reportFile = `output-${timestamp}.md`;
+    mainAgent.getSandbox()?.writeFile(reportFile, report.content);
+    console.log(`\n💾 已自动保存到 output/${reportFile}`);
+  }
 
   // ── 汇总展示结果 ──────────────────────────────────────
   const sandbox = mainAgent.getSandbox();
@@ -221,11 +230,13 @@ Deep Agent 底层基于 LangGraph，面向通用型智能体场景，开箱即�
     console.log("\n📂 生成的文件：");
     files.forEach((f) => console.log(`  ✅ output/${f}`));
 
-    const report = sandbox.readFile("tech-research-report.md");
-    if (report) {
+    const reportText = sandbox.readFile(reportFile);
+    if (reportText) {
       console.log("\n📖 报告预览（前 500 字）：");
       console.log("─".repeat(50));
-      console.log(report.slice(0, 500) + (report.length > 500 ? "\n..." : ""));
+      console.log(
+        reportText.slice(0, 500) + (reportText.length > 500 ? "\n..." : ""),
+      );
       console.log("─".repeat(50));
     }
   }
