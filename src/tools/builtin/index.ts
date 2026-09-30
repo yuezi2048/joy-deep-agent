@@ -17,8 +17,6 @@ export interface BuiltinToolOptions {
   writeRequiresConfirmation?: boolean;
   allowedCommands?: readonly string[];
   commandTimeoutMs?: number;
-  /** 单次读文件回灌给模型的最大字符数，防止把上下文冲爆 */
-  maxReadChars?: number;
 }
 
 /** 内置工具集：文件读写、目录列举、命令执行、算术。 */
@@ -26,17 +24,16 @@ export function createBuiltinTools(options: BuiltinToolOptions): ToolDefinition[
   const guard = new PathGuard(options.workspaceRoot);
   const allowedCommands = options.allowedCommands ?? DEFAULT_ALLOWED_COMMANDS;
   const commandTimeoutMs = options.commandTimeoutMs ?? 30_000;
-  const maxReadChars = options.maxReadChars ?? 16_000;
 
   const readFileTool: ToolDefinition = {
     name: 'read_file',
-    description: `读取工作区内的文本文件（最多返回 ${maxReadChars} 字符）`,
+    description: '读取工作区内的文本文件',
     schema: z.object({ path: z.string().describe('相对工作区的路径') }),
+    // 不做长度上限：工具结果占多少上下文，由上下文预算层统一决定（见 ADR-0002 同一思路），
+    // 各工具自己设上限只会让「结果多大」这件事散落在几十处、口径还不一致。
     handler: async ({ path }: { path: string }) => {
       const absolute = guard.resolve(path);
-      const content = await readFile(absolute, 'utf8');
-      if (content.length <= maxReadChars) return content;
-      return `${content.slice(0, maxReadChars)}\n…（已截断，原文共 ${content.length} 字符）`;
+      return readFile(absolute, 'utf8');
     },
   };
 

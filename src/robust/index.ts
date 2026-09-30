@@ -6,6 +6,11 @@ import { withRetryMiddleware, type RetryOptions } from './retry.js';
 import { withTimeoutMiddleware } from './timeout.js';
 
 export * from './budget.js';
+export * from './compaction.js';
+export * from './context-manager.js';
+export * from './result-truncate.js';
+export * from './sliding-window.js';
+export * from './token-counter.js';
 export * from './circuit-breaker.js';
 export * from './dedupe.js';
 export * from './retry.js';

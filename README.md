@@ -15,7 +15,7 @@
 pnpm install
 cp .env.example .env        # 至少填一个供应商的 Key
 
-pnpm test                   # 88 个单测，全部走假模型，不烧 API
+pnpm test                   # 107 个单测，全部走假模型，不烧 API
 pnpm start                  # 起 Harness：http://localhost:3000
 pnpm run demo               # 或直接进命令行 REPL
 ```
@@ -36,7 +36,7 @@ curl -N "localhost:3000/agent/stream?input=算一下%20(2%2B3)*4"
 | 死循环治理（步数上限 + 无进展指纹） | `src/core/agent-loop.ts` | **已实现**，含单测 |
 | HITL 高风险操作确认 | `src/core/agent-loop.ts` | **已实现**，含单测 |
 | NestJS 服务化 + SSE 流式接口 | `src/nest/`、`src/main.ts` | **已实现**，含单测 |
-| 上下文溢出治理（token 估算 / 滑动窗口 / 摘要压缩） | 待迁 | 未开始 |
+| 上下文溢出治理（token 估算 / 滑动窗口 / 摘要压缩） | `src/robust/context-manager.ts` | **已实现**，含单测 |
 | 用户中断（Checkpoint / Resume） | 待迁 | 未开始 |
 | Skill 热插拔、VFS 沙箱 | 待迁（原型 `deep-agent-demo`） | 未开始 |
 | MCP / A2A 接入 | 待迁（原型 `agent-protocols`） | 未开始 |

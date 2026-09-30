@@ -3,6 +3,10 @@ import { spawn } from 'node:child_process';
 export interface SafeExecOptions {
   cwd?: string;
   timeoutMs?: number;
+  /**
+   * 单个流的最大字节数。注意这**不是**上下文预算：它挡的是「命令吐出几个 G」这种内存风险，
+   * 因为边读边截只能在流式读取时做。工具结果占多少上下文，由上下文预算层统一决定。
+   */
   maxOutputBytes?: number;
   signal?: AbortSignal;
   /** 命令白名单。默认只放行常见的只读/构建命令，破坏性命令一律不放行。 */

@@ -1,6 +1,6 @@
 import type { ChatModel } from '../providers/chat-model.js';
 import { buildProviders, createChatModel, selectProvider } from '../providers/index.js';
-import { applyDefaultToolMiddleware } from '../robust/index.js';
+import { applyDefaultToolMiddleware, withContextBudget } from '../robust/index.js';
 import { createBuiltinTools } from '../tools/builtin/index.js';
 import { ToolRegistry } from '../tools/registry.js';
 
@@ -25,9 +25,15 @@ export function createAgentRuntime(options: AgentRuntimeOptions = {}): AgentRunt
   const env = process.env;
   const provider = selectProvider(buildProviders(), options.providerKey ?? env.AGENT_PROVIDER);
 
-  const model = createChatModel(provider, {
+  const baseModel = createChatModel(provider, {
     temperature: Number(env.AGENT_TEMPERATURE ?? 0.3),
     maxTokens: Number(env.AGENT_MAX_TOKENS ?? 4096),
+  });
+
+  // 上下文预算层包在模型外层：轨迹在 AgentLoop 里保持完整，收缩的只是发给模型的视图
+  const model = withContextBudget(baseModel, {
+    maxTokens: Number(env.AGENT_CONTEXT_TOKENS ?? 32_000),
+    maxToolResultTokens: Number(env.AGENT_TOOL_RESULT_TOKENS ?? 2_000),
   });
 
   const builtin = createBuiltinTools({
