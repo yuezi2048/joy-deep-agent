@@ -198,8 +198,20 @@ function readPositiveInt(name: string, fallback: number): number {
   return parsed;
 }
 
+/**
+ * 从 argv 解析目标。
+ *
+ * `pnpm run report -- "<目标>"` 里的 `--` 会被 pnpm **原样传给脚本**（npm 会自己剥掉），
+ * 所以这里只剥掉**首个** `--`：两种包管理器下的写法都能得到干净的目标，
+ * 也不会误伤目标正文里出现的 `--`。
+ */
+export function parseGoal(argv: readonly string[]): string {
+  const args = argv[0] === '--' ? argv.slice(1) : argv;
+  return args.join(' ').trim();
+}
+
 async function main(): Promise<void> {
-  const goal = process.argv.slice(2).join(' ').trim();
+  const goal = parseGoal(process.argv.slice(2));
   if (!goal) {
     console.log(USAGE);
     process.exitCode = 1;

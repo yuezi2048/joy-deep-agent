@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ChatModel, ChatRequest, ChatResponse, StreamChunk } from '../src/providers/chat-model.js';
 import { InMemoryMemoryStore } from '../src/memory/index.js';
-import { orchestrate } from '../src/orchestrate.js';
+import { orchestrate, parseGoal } from '../src/orchestrate.js';
 import type { AgentRuntime } from '../src/runtime.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 
@@ -131,5 +131,14 @@ describe('orchestrate（编排入口）', () => {
         out: () => {},
       }),
     ).rejects.toThrow();
+  });
+});
+
+describe('parseGoal（入口参数）', () => {
+  it('pnpm 原样传来的首个 -- 被剥掉，目标正文里的 -- 不受影响', () => {
+    expect(parseGoal(['--', '调研', 'X'])).toBe('调研 X');
+    expect(parseGoal(['调研', 'X'])).toBe('调研 X');
+    expect(parseGoal(['--', '对比', 'A --', 'B'])).toBe('对比 A -- B');
+    expect(parseGoal([])).toBe('');
   });
 });

@@ -66,7 +66,15 @@ async function main(): Promise<void> {
   console.log('输入任务开始，/reset 清空上下文，/skills 看技能，/exit 退出。\n');
 
   for (;;) {
-    const line = (await rl.question('你：')).trim();
+    let line: string;
+    try {
+      line = (await rl.question('你：')).trim();
+    } catch {
+      // stdin 结束（Ctrl-D 或管道输入跑完）时 readline 会带着挂起的 question 一起关掉。
+      // 这不是错误，是「用户不说话了」——当正常退出，别打栈、也别给非零退出码。
+      process.stdout.write('\n');
+      break;
+    }
     if (!line) continue;
     if (line === '/exit') break;
     if (line === '/reset') {

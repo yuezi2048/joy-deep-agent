@@ -82,7 +82,7 @@ flowchart TD
 pnpm install
 cp .env.example .env        # 至少填一个供应商的 Key
 
-pnpm test                   # 409 个单测，全部走假模型，不烧 API
+pnpm test                   # 410 个单测，全部走假模型，不烧 API
 pnpm eval                   # 跑故障注入评测，输出 docs/eval/report-<日期>.md
 pnpm verify                 # 单测 + 评测门禁（CI 跑的就是这一条）
 pnpm start                  # 起 Harness：http://localhost:3000
@@ -221,6 +221,8 @@ AGENT_WRITE_ROOT=.joy-agent pnpm run demo    # 读全工作区，只准往 .joy-
 加固不是免费的：完成率与恢复率的提升，对应 token 均值翻了一倍多（自我核查与重试/转移的重发都算在加固账上）。
 恢复时间按生产退避策略实测、不调参：S-01 限流重试 P50 = 501ms / 2 次尝试，S-06 供应商转移 P50 = 0ms / 2 次尝试。
 口径见 `docs/eval/metrics.md`，逐场景数据见 `docs/eval/report-2026-09-30.md`。
+评测本身用假模型（确定性回归）；另有一份**真模型 smoke 记录** `docs/eval/real-model-2026-09-30.md`——
+验证换真供应商链路可用，并记下了两次真跑才暴露的两个入口级问题（都已修）。
 
 CI 里跑 `pnpm verify`（单测 + `pnpm eval:gate`）：**加固侧不许比基线差**，总体完成率不得低于达标线
 （默认 100%，依据是 2026-09-30 实测 45/45 逐类全过）；退化时非零退出并列出是哪一类退了、差多少 pp。
