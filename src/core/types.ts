@@ -54,6 +54,11 @@ export interface ToolDefinition {
   description: string;
   schema: ZodType;
   handler: (args: any, ctx: ToolContext) => Promise<ToolOutcome>;
+  /**
+   * 直接交给模型的参数 schema，覆盖由 `schema` 推导出的那份。
+   * 远端工具（MCP）本来就有权威 JSON Schema，经 zod 往返会丢信息；本地校验仍走 `schema`。
+   */
+  parameters?: Record<string, unknown>;
   /** 高风险操作，需要 HITL 确认后才执行 */
   requiresConfirmation?: boolean;
   /**
@@ -73,4 +78,12 @@ export function toToolResult(outcome: ToolOutcome): ToolResult {
 
 export function toErrorResult(content: string): ToolResult {
   return { content, isError: true };
+}
+
+/** 把一次调用的 token 账累加进总计。多处要算「一共烧了多少」，口径必须只有一处。 */
+export function addUsage(target: Usage, delta?: Usage): void {
+  if (!delta) return;
+  target.promptTokens = (target.promptTokens ?? 0) + (delta.promptTokens ?? 0);
+  target.completionTokens = (target.completionTokens ?? 0) + (delta.completionTokens ?? 0);
+  target.totalTokens = (target.totalTokens ?? 0) + (delta.totalTokens ?? 0);
 }

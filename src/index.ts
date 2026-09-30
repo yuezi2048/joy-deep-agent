@@ -2,6 +2,7 @@
 
 export * from './core/types.js';
 export * from './core/errors.js';
+export { isRecord } from './core/record.js';
 export {
   AgentLoop,
   DEFAULT_SYSTEM_PROMPT,
@@ -41,6 +42,8 @@ export {
 } from './security/preflight.js';
 
 export * from './memory/index.js';
+export * from './protocols/index.js';
+export * from './orchestrator/index.js';
 export * from './providers/index.js';
 export * from './robust/index.js';
 export * from './eval/index.js';

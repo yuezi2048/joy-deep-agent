@@ -15,17 +15,57 @@
 pnpm install
 cp .env.example .env        # 至少填一个供应商的 Key
 
-pnpm test                   # 243 个单测，全部走假模型，不烧 API
+pnpm test                   # 350 个单测，全部走假模型，不烧 API
 pnpm eval                   # 跑故障注入评测，输出 docs/eval/report-<日期>.md
 pnpm verify                 # 单测 + 评测门禁（CI 跑的就是这一条）
 pnpm start                  # 起 Harness：http://localhost:3000
 pnpm run demo               # 或直接进命令行 REPL
+pnpm run report -- "调研 X 并产出一份报告"   # 多智能体编排：规划 → 并发执行 → 汇总 → 落盘
 ```
 
 ```bash
 curl localhost:3000/agent/info
 curl -N "localhost:3000/agent/stream?input=算一下%20(2%2B3)*4"
+curl localhost:3000/.well-known/agent-card.json
 ```
+
+## 协议接入
+
+MCP 与 A2A 都压成**工具**（ADR-0005）：主循环对协议零感知，远端工具与内置工具在中间件、
+HITL 确认、前置依赖上完全同权。适配器只依赖自定的端口（`McpConnection` / `A2AAgentClient`），
+官方 SDK 只允许出现在传输实现里（ADR-0006）。
+
+- **MCP → 工具来源**：`MCP_SERVERS` 配一个 server，它的每个 tool 变成 `mcp__<server>__<tool>` 进同一个注册表；
+  远端没声明 `readOnlyHint` 的工具默认要人工确认。
+- **A2A → 子 agent 传输**：`A2A_AGENTS` 配远端 agent，注册成一个 `delegate` 工具；调用前先读
+  `/.well-known/agent-card.json` 发现能力，任务端点以名片声明的 `url` 为准（多 agent 时必须点名）。
+- **本机也是 A2A agent**：`GET /.well-known/agent-card.json` 发名片，`POST /a2a` 收 JSON-RPC `message/send`。
+
+配置见 `.env.example`；两个变量都留空时，工具集与行为跟没接协议时完全一致。
+
+## 多智能体编排
+
+`pnpm run report -- "<目标>"` 跑完整条链，产物是一份报告而不是一段对话（ADR-0007）：
+
+1. **Planner** 调一次模型把目标拆成 `{ goal, steps[{ id, role, task, dependsOn }] }`，本地严格校验；
+   计划产出不合法（截断 / 抽不出 JSON / 角色不存在 / 成环）时降级为单步，并在结果里如实标注来源与原因。
+2. **子智能体**按 `dependsOn` **分波并发**（波内并发、波间串行，默认上限 3）：检索 / 分析 / 写作三类内置角色，
+   各带系统提示与工具白名单。每个子智能体新建 `AgentLoop` 与独立工具注册表 —— 上下文不回流编排层，
+   这是「避免单 Agent 长链路上下文溢出」的落点；上游输出按 token 预算截断后才注入下游。
+3. **汇总**由主模型把各步收敛成报告，汇总调用失败则退化成确定性拼接并标注；
+   落盘由代码经 `PathGuard` 执行（`report-<时间戳>.md` + `.json`），不让模型写 `<file>` 标签。
+
+长期记忆（`MemoryStore`）在这条链上是闭环的：Supervisor 每次收尾把结果摘要 `remember` 进 scope，
+Planner 下次规划时 `recall` 回来注入提示。`AGENT_MEMORY=file` 时会话与长期记忆都落到 `AGENT_MEMORY_DIR`，
+换进程也能用同一 `sessionId` 把上下文接回来。缺省是 `memory`（只活在进程内，服务侧行为与从前一致）：
+CLI 每个进程只跑一个任务，内存后端下长期记忆写得进、读不回，所以入口会如实提示一句——
+想跨次累积就设 `AGENT_MEMORY=file`。
+
+```bash
+pnpm run report -- "对比三个候选方案，产出一份选型建议"
+```
+
+入口在不配模型 Key 时只打印可读提示并非零退出，不抛栈。
 
 ## 当前状态
 
@@ -45,8 +85,9 @@ curl -N "localhost:3000/agent/stream?input=算一下%20(2%2B3)*4"
 | 上下文溢出治理（token 估算 / 滑动窗口 / 摘要压缩） | `src/robust/context-manager.ts` | **已实现**，含单测 |
 | 用户中断（Checkpoint / Resume） | `src/memory/`、`src/core/agent-loop.ts` | **已实现**，含单测（取消落盘、续跑不重复副作用、原子写） |
 | Skill 热插拔、VFS 沙箱 | 待迁（原型 `deep-agent-demo`） | 未开始 |
-| MCP / A2A 接入 | 待迁（原型 `agent-protocols`） | 未开始 |
-| Planner / Memory | 待建 | 未开始 |
+| MCP / A2A 接入（MCP 工具来源 + A2A `delegate` + 本机 A2A 端点） | `src/protocols/`、`src/nest/a2a.controller.ts` | **已实现**，含单测 |
+| Planner + 多智能体编排（规划 → 子智能体分波并发 → 汇总 → 结构化落盘） | `src/orchestrator/` | **已实现**，含单测；入口 `pnpm run report` |
+| 记忆（短期会话历史 + 长期记忆，`AGENT_MEMORY=memory\|file` 可跨进程重启） | `src/memory/memory-store.ts` | **已实现**，含单测 |
 | 故障注入评测（量化收益） | `src/eval/`、`docs/eval/report-*.md` | **已实现**：8 类故障 + 1 条无故障对照，入口 `pnpm eval` |
 | 协议 / 鲁棒性 / 基础 agent 原型 | `prototypes/` | 已冻结，只读 |
 
@@ -79,7 +120,7 @@ CI 里跑 `pnpm verify`（单测 + `pnpm eval:gate`）：**加固侧不许比基
 joy-deep-agent/
 ├── AGENTS.md            # 给编码 agent 的工作说明
 ├── CONTEXT.md           # 领域词汇表（持续维护）
-├── docs/adr/            # 架构决策记录（已定 5 条）
+├── docs/adr/            # 架构决策记录（已定 7 条）
 ├── docs/eval/           # 评测口径与报告模板
 ├── prototypes/          # 冻结的三份原始 demo，只读
 └── src/
@@ -90,8 +131,10 @@ joy-deep-agent/
     ├── eval/            # 评测指标采集与报告渲染
     ├── memory/          # Checkpoint / Memory 持久化接口与实现
     ├── security/        # 路径防护
-    ├── nest/            # NestJS 模块、控制器、SSE、运行时装配
-    └── cli.ts / main.ts # 两个入口：命令行 REPL 与 HTTP 服务
+    ├── orchestrator/    # Planner、角色与子智能体、分波并发、汇总与报告落盘
+    ├── nest/            # NestJS 模块、控制器、SSE
+    ├── runtime.ts       # 模型 + 工具 + 中间件的装配（不含 Nest 依赖）
+    └── cli.ts / orchestrate.ts / main.ts  # 三个入口：REPL / 编排报告 / HTTP 服务
 ```
 
 ## 环境

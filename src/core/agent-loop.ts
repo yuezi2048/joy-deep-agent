@@ -5,7 +5,7 @@ import { AsyncQueue } from './async-queue.js';
 import { deterministicToolCallId } from './stable-key.js';
 import { CITATION_INSTRUCTION, checkCitations } from '../robust/citation-guard.js';
 import { SelfChecker } from '../robust/self-check.js';
-import type { ChatMessage, ToolCall, ToolDefinition, ToolResult, Usage } from './types.js';
+import { addUsage, type ChatMessage, type ToolCall, type ToolDefinition, type ToolResult, type Usage } from './types.js';
 
 export type StopReason =
   | 'completed'
@@ -129,6 +129,11 @@ export interface AgentLoopOptions {
   signal?: AbortSignal;
   /** 提供后每个步边界与每次工具调用都会落盘，支持中断续跑（见 ADR-0004） */
   checkpoint?: CheckpointOptions;
+  /**
+   * 初始上下文：构造时预置进消息轨迹，用来把上一个进程留下的会话接回来（见 AgentService）。
+   * 预置的消息不占步数，只是开场白；`reset()` 会连它一起清掉。
+   */
+  initialMessages?: readonly ChatMessage[];
 }
 
 export interface AgentLoopDeps {
@@ -210,6 +215,9 @@ export class AgentLoop {
     this.confirm = deps.options?.confirm;
     this.signal = deps.options?.signal;
     this.checkpoint = deps.options?.checkpoint;
+    if (deps.options?.initialMessages?.length) {
+      this.messages.push(...deps.options.initialMessages.map((message) => ({ ...message })));
+    }
   }
 
   get history(): readonly ChatMessage[] {
@@ -387,7 +395,7 @@ export class AgentLoop {
         throw error;
       }
       if (this.timedOut) return this.finishTimeout(state);
-      accumulateUsage(state.usage, turn.usage);
+      addUsage(state.usage, turn.usage);
       state.lastContent = turn.content;
 
       // id 用确定性推导，模型给的随机 id 一旦跨进程重启就没法用来判定「这一步跑过没有」
@@ -471,7 +479,7 @@ export class AgentLoop {
       degraded = verdict.degraded;
       degradedReason = verdict.degradedReason;
       // 核查是加固自身的开销，口径要求算进本次运行的 token 总账
-      accumulateUsage(state.usage, verdict.usage);
+      addUsage(state.usage, verdict.usage);
       if (!verdict.ok) issues.push(...verdict.issues);
     }
 
@@ -652,13 +660,6 @@ interface TurnOutcome {
   content: string;
   toolCalls: ToolCall[];
   usage?: Usage;
-}
-
-function accumulateUsage(target: Usage, delta?: Usage): void {
-  if (!delta) return;
-  target.promptTokens = (target.promptTokens ?? 0) + (delta.promptTokens ?? 0);
-  target.completionTokens = (target.completionTokens ?? 0) + (delta.completionTokens ?? 0);
-  target.totalTokens = (target.totalTokens ?? 0) + (delta.totalTokens ?? 0);
 }
 
 function fingerprint(calls: readonly ToolCall[]): string {

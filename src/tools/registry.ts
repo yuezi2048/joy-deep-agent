@@ -1,5 +1,6 @@
 import type {
   ToolCall,
+  ToolContext,
   ToolDefinition,
   ToolHandler,
   ToolMiddleware,
@@ -123,12 +124,12 @@ export class ToolRegistry {
     return this.definitions.size;
   }
 
-  /** 传给模型的工具声明。 */
+  /** 传给模型的工具声明。远端工具自带的 `parameters` 优先于由 zod 推导的那份。 */
   schemas(): ToolSchema[] {
     return [...this.definitions.values()].map((definition) => ({
       name: definition.name,
       description: definition.description,
-      parameters: toJsonSchema(definition.schema),
+      parameters: definition.parameters ?? toJsonSchema(definition.schema),
     }));
   }
 
@@ -162,7 +163,7 @@ export class ToolRegistry {
     }
 
     const validated: ToolCall = { ...call, arguments: parsed.data as Record<string, unknown> };
-    const chain = this.buildChain(definition);
+    const chain = this.buildChain(definition, signal);
     let result: ToolResult;
     try {
       result = await chain(validated);
@@ -175,9 +176,10 @@ export class ToolRegistry {
     return result;
   }
 
-  private buildChain(definition: ToolDefinition): ToolHandler {
+  private buildChain(definition: ToolDefinition, signal?: AbortSignal): ToolHandler {
     const base: ToolHandler = async (call) => {
-      const ctx = { callId: call.id };
+      // 把取消信号透给工具本体：远端调用（MCP / A2A）与长命令都靠它被墙钟上限掐断
+      const ctx: ToolContext = signal ? { callId: call.id, signal } : { callId: call.id };
       return toToolResult(await definition.handler(call.arguments, ctx));
     };
     return this.middleware.reduceRight<ToolHandler>((next, middleware) => middleware(next), base);

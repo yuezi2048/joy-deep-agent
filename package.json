@@ -17,6 +17,7 @@
     "eval:gate": "tsx src/eval/gate.ts",
     "verify": "pnpm test && pnpm eval:gate",
     "demo": "tsx src/cli.ts",
+    "report": "tsx src/orchestrate.ts",
     "start": "tsx src/main.ts",
     "start:dev": "tsx watch src/main.ts"
   },
@@ -30,6 +31,7 @@
     "llm"
   ],
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "@nestjs/common": "^12.1.2",
     "@nestjs/config": "^12.0.1",
     "@nestjs/core": "^12.1.2",

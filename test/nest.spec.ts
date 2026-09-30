@@ -1,10 +1,14 @@
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { HttpException } from '@nestjs/common';
 import { firstValueFrom, toArray } from 'rxjs';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { JsonFileMemoryStore } from '../src/memory/index.js';
 import { AgentController } from '../src/nest/agent.controller.js';
 import { AgentService } from '../src/nest/agent.service.js';
-import type { AgentRuntime } from '../src/nest/runtime.js';
+import type { AgentRuntime } from '../src/runtime.js';
 import type { ChatResponse } from '../src/providers/chat-model.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { FakeChatModel, answerTurn, toolTurn } from './helpers/fake-model.js';
@@ -148,5 +152,94 @@ describe('AgentController', () => {
     const controller = new AgentController(new AgentService(runtime));
 
     expect(() => controller.stream('  ')).toThrow(HttpException);
+  });
+});
+
+describe('AgentService · 会话记忆（ADR-0004）', () => {
+  const tempDir = () => mkdtemp(join(tmpdir(), 'joy-nest-memory-'));
+
+  it('file 记忆：新 service 实例（新 store 对象）仍能接回上一轮会话', async () => {
+    const dir = await tempDir();
+    const before = makeRuntime([answerTurn('第一次回答')]);
+    await new AgentService(before.runtime, new JsonFileMemoryStore(dir)).run('第一句', 's1');
+
+    // 这个 store 对象从磁盘读，等价于「进程重启后」的场景
+    const after = makeRuntime([answerTurn('第二次回答')]);
+    await new AgentService(after.runtime, new JsonFileMemoryStore(dir)).run('第二句', 's1');
+
+    const userMessages = after.model.calls[0]?.messages.filter((m) => m.role === 'user');
+    expect(userMessages?.map((m) => m.content)).toEqual(['第一句', '第二句']);
+  });
+
+  it('历史超过上限时只接回最近若干条，且从「一轮的开头」切齐', async () => {
+    const dir = await tempDir();
+    const store = new JsonFileMemoryStore(dir);
+    const before = makeRuntime([answerTurn('a1'), answerTurn('a2')]);
+    const service = new AgentService(before.runtime, store);
+    await service.run('第一句', 's1');
+    await service.run('第二句', 's1');
+
+    const after = makeRuntime([answerTurn('a3')]);
+    await new AgentService(after.runtime, new JsonFileMemoryStore(dir), { historyLimit: 2 }).run('第三句', 's1');
+
+    expect(after.model.calls[0]?.messages.filter((m) => m.role === 'user').map((m) => m.content)).toEqual([
+      '第二句',
+      '第三句',
+    ]);
+  });
+
+  it('上限切下来只剩半轮时整段丢掉，不留下没有归属的 tool 消息', async () => {
+    const dir = await tempDir();
+    const store = new JsonFileMemoryStore(dir);
+    await store.append('s1', { role: 'assistant', content: '半截回复' });
+    await store.append('s1', { role: 'tool', toolCallId: 'call_1', name: 'read_file', content: '内容' });
+
+    const { runtime, model } = makeRuntime([answerTurn('好的')]);
+    await new AgentService(runtime, new JsonFileMemoryStore(dir), { historyLimit: 1 }).run('新问题', 's1');
+
+    expect(model.calls[0]?.messages.map((m) => m.role)).toEqual(['system', 'user']);
+  });
+
+  it('reset 连落盘历史一起清掉', async () => {
+    const dir = await tempDir();
+    const store = new JsonFileMemoryStore(dir);
+    const before = makeRuntime([answerTurn('a1')]);
+    const service = new AgentService(before.runtime, store);
+    await service.run('第一句', 's1');
+
+    await service.reset('s1');
+
+    expect(await store.history('s1')).toEqual([]);
+    const after = makeRuntime([answerTurn('a2')]);
+    await new AgentService(after.runtime, new JsonFileMemoryStore(dir)).run('重新开始', 's1');
+    expect(after.model.calls[0]?.messages.filter((m) => m.role === 'user').map((m) => m.content)).toEqual([
+      '重新开始',
+    ]);
+  });
+
+  it('流式会话同样落历史', async () => {
+    const dir = await tempDir();
+    const store = new JsonFileMemoryStore(dir);
+    const before = makeRuntime([answerTurn('流式回答')]);
+    const service = new AgentService(before.runtime, store);
+
+    for await (const _event of service.stream('流式提问', 's1')) {
+      // 消费到底，让生成器跑完
+    }
+
+    expect((await store.history('s1')).map((m) => m.content)).toEqual(['流式提问', '流式回答']);
+  });
+
+  it('默认（memory）后端下不落盘，行为与从前一致', async () => {
+    const { runtime, model } = makeRuntime([answerTurn('a1'), answerTurn('a2')]);
+    const service = new AgentService(runtime);
+
+    await service.run('第一句', 's1');
+    await service.run('第二句', 's1');
+
+    expect(model.calls[1]?.messages.filter((m) => m.role === 'user').map((m) => m.content)).toEqual([
+      '第一句',
+      '第二句',
+    ]);
   });
 });

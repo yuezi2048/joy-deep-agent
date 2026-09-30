@@ -18,12 +18,15 @@ async function bootstrap(): Promise<void> {
   }
 
   const app = await NestFactory.create(AppModule);
+  // 退出时把协议层拉起的 MCP 子进程收干净（见 AgentService.onApplicationShutdown）
+  app.enableShutdownHooks();
   const port = Number(process.env.PORT ?? 3000);
   await app.listen(port);
   console.log(`Joy-Deep-Agent Harness 已启动：http://localhost:${port}`);
   console.log(`  自检  GET  /agent/info`);
   console.log(`  执行  POST /agent/run        { "input": "...", "sessionId": "..." }`);
   console.log(`  流式  GET  /agent/stream?input=...`);
+  console.log(`  A2A   GET  /.well-known/agent-card.json   POST /a2a`);
 }
 
 bootstrap().catch((error: unknown) => {
