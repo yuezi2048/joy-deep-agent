@@ -9,6 +9,73 @@
 - **目标形态**：NestJS Module/Provider 依赖注入分层（编排 / 工具 / 模型 / 持久化），统一服务与 SSE 流式接口，DeepSeek / OpenAI 零改动切换；自研 ReAct AgentLoop、Planner、Memory 与工具注册表，Skill 热插拔、VFS 沙箱、HITL 确认；接入 MCP / A2A，主 Agent 拆解后由子 Agent 并发汇总。
 - **鲁棒性**：失败调用、幻觉、工具误用、死循环、上下文溢出、供应商故障、用户中断、终端环境异常，共 8 类故障的治理层。
 
+## 架构
+
+**三行说清**：入口有三个（CLI REPL / NestJS 服务 + SSE / 编排入口），内核只有一个（`AgentLoop`：ReAct 决策 + 死循环治理 + HITL 确认门），外面套三层——模型层管供应商与上下文预算，工具层管注册、校验、重试、沙箱与协议工具，持久层管检查点续跑与长期记忆。
+
+```mermaid
+flowchart TD
+  subgraph ENTRY["入口"]
+    PRE["启动预检 security<br/>工作区 · 命令白名单 · 环境"]
+    CLI["CLI REPL<br/>pnpm run demo"]
+    HTTP["NestJS 服务 + SSE<br/>pnpm start"]
+    ORCH["编排入口<br/>pnpm run report"]
+  end
+
+  subgraph CORE["内核 core"]
+    LOOP["AgentLoop<br/>ReAct 主循环"]
+    GUARD["死循环治理<br/>步数 · 墙钟 · 无进展指纹 · 横跳检测"]
+    HITL["HITL 确认门<br/>高风险操作 · 越界不打扰"]
+  end
+
+  subgraph MODEL["模型层 providers · robust"]
+    BUDGET["上下文预算<br/>滑窗 · 摘要压缩 · 结果截断"]
+    FAILOVER["FailoverChatModel<br/>熔断 + 按优先级转移"]
+  end
+
+  subgraph TOOLS["工具层 tools"]
+    REG["ToolRegistry<br/>参数校验 · 依赖序 · JSON 容错"]
+    MW["鲁棒中间件<br/>重试 · 超时 · 去重 · 调用预算"]
+    BUILTIN["内置工具<br/>文件 · 命令 · 计算"]
+    VFS["VFS 沙箱<br/>挂载表 · realpath · 配额 · 审计"]
+    SKILL["技能 skills<br/>SKILL.md 热插拔 · 命中才注入"]
+    PROTO["协议 protocols<br/>MCP 工具来源 · A2A delegate"]
+  end
+
+  subgraph STATE["编排与持久"]
+    SUP["Supervisor<br/>Planner → 子智能体分波并发 → 汇总落盘"]
+    CKPT["Checkpoint<br/>中断续跑 · 确定性 ToolCall id"]
+    LT["长期记忆<br/>memory / file 可切"]
+  end
+
+  EVAL["评测与 CI 门禁<br/>8 类故障注入 · 基线对比 · 退化即非零退出"]
+
+  PRE --> CLI
+  PRE --> HTTP
+  PRE --> ORCH
+  CLI --> LOOP
+  HTTP --> LOOP
+  ORCH --> SUP
+  SUP --> LOOP
+  LOOP --> GUARD
+  LOOP --> HITL
+  LOOP --> BUDGET
+  BUDGET --> FAILOVER
+  FAILOVER --> API["模型供应商<br/>DeepSeek · OpenAI · 通义 · Ollama"]
+  LOOP --> REG
+  REG --> MW
+  MW --> BUILTIN
+  BUILTIN --> VFS
+  LOOP --> SKILL
+  REG --> PROTO
+  LOOP --> CKPT
+  SUP --> LT
+  EVAL -.->|驱动真实中间件与循环，只替换模型| LOOP
+```
+
+读图顺序：**入口 → 内核 → 模型/工具/持久**。想知道「某个能力在哪」就直接看状态表；
+想知道「为什么这么设计」，每块都有对应 ADR 与注释。
+
 ## 快速开始
 
 ```bash
