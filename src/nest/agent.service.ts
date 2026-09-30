@@ -49,7 +49,11 @@ export class AgentService {
   private loopFor(sessionId: string): AgentLoop {
     let loop = this.sessions.get(sessionId);
     if (!loop) {
-      loop = new AgentLoop({ model: this.runtime.model, tools: this.runtime.tools });
+      loop = new AgentLoop({
+        model: this.runtime.model,
+        tools: this.runtime.tools,
+        ...(this.runtime.loopOptions ? { options: this.runtime.loopOptions } : {}),
+      });
       this.sessions.set(sessionId, loop);
     }
     return loop;

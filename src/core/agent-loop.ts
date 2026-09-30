@@ -3,6 +3,8 @@ import type { ChatModel, ChatRequest } from '../providers/chat-model.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import { AsyncQueue } from './async-queue.js';
 import { deterministicToolCallId } from './stable-key.js';
+import { CITATION_INSTRUCTION, checkCitations } from '../robust/citation-guard.js';
+import { SelfChecker } from '../robust/self-check.js';
 import type { ChatMessage, ToolCall, ToolDefinition, ToolResult, Usage } from './types.js';
 
 export type StopReason =
@@ -13,6 +15,18 @@ export type StopReason =
   | 'timeout'
   | 'cancelled';
 
+/** 交付前核查这一版的结论。未开启核查时结果里没有这个字段。 */
+export interface VerificationReport {
+  /** 交付前一共修正了几轮 */
+  rounds: number;
+  /** 最终交付的这一版是否通过核查 */
+  passed: boolean;
+  issues: string[];
+  /** 核查器本身没跑成（输出没法解析 / 调用失败）时置位——这一版可能并没有真被检查过 */
+  degraded: boolean;
+  degradedReason?: string;
+}
+
 export interface AgentRunResult {
   /** 最后一条 assistant 文本 */
   content: string;
@@ -20,6 +34,8 @@ export interface AgentRunResult {
   stopReason: StopReason;
   /** 停下来的具体理由（横跳周期、超时耗时等），排查时不用再猜 */
   stopDetail?: string;
+  /** 交付前核查记录；两层都关时为空 */
+  verification?: VerificationReport;
   /** 完整对话轨迹，含工具结果，可直接续跑 */
   messages: readonly ChatMessage[];
   toolCalls: readonly ToolCall[];
@@ -32,6 +48,22 @@ export type AgentEvent =
   | { type: 'tool_call'; call: ToolCall }
   | { type: 'tool_result'; call: ToolCall; result: ToolResult }
   | { type: 'done'; result: AgentRunResult };
+
+/** 来源约束：要求关键结论标注真正得到过的工具结果（见 `robust/citation-guard.ts`）。 */
+export interface SourceConstraintOptions {
+  enabled?: boolean;
+  /** 用过工具却一个标注都没有时是否算问题（默认 true） */
+  requireCitation?: boolean;
+}
+
+/** 自我核查：交付前让核查模型挑出没有依据的断言（见 `robust/self-check.ts`）。 */
+export interface SelfCheckOptions {
+  enabled?: boolean;
+  /** 最多修正几轮，超过就带着问题交付并如实记录 */
+  maxRounds?: number;
+  /** 用另一个（更便宜的）模型做核查；默认复用主模型 */
+  model?: ChatModel;
+}
 
 /** 检查点配置：`store` 决定存哪儿，`id` 标识任务——只有同一个 id 才能续跑。 */
 export interface CheckpointOptions {
@@ -55,8 +87,19 @@ export interface AgentCheckpointState {
   executed: ToolCall[];
 }
 
-/** 单次执行的可变状态（不含消息，消息存在实例的 `messages` 上）。 */
-type RunState = Omit<AgentCheckpointState, 'messages'>;
+/** 单次执行的可变状态。消息存在实例的 `messages` 上，核查轮数只属于本次执行，不落盘。 */
+interface RunState {
+  input: string;
+  steps: number;
+  lastContent: string;
+  fingerprints: string[];
+  usage: Usage;
+  executed: ToolCall[];
+  /** 本次执行已经用掉的核查修正轮数 */
+  revisions: number;
+  /** 最近一次交付前核查的结果 */
+  verification?: VerificationReport;
+}
 
 export interface AgentLoopOptions {
   systemPrompt?: string;
@@ -72,6 +115,10 @@ export interface AgentLoopOptions {
   maxDurationMs?: number;
   /** 时间源，测试可注入假时钟 */
   now?: () => number;
+  /** 来源约束：要求关键结论标注真正得到的工具结果 */
+  sourceConstraint?: SourceConstraintOptions;
+  /** 自我核查：交付前跑一次来源核查，不通过就把问题回灌给模型修正 */
+  selfCheck?: SelfCheckOptions;
   /**
    * HITL 确认钩子。`requiresConfirmation` 的工具会先走这里；
    * 未提供钩子时默认拒绝——宁可拒绝，也不默认放行高风险操作。
@@ -99,12 +146,14 @@ const DEFAULTS = {
   maxCyclePeriod: 3,
   cycleRepeats: 2,
   maxDurationMs: 300_000,
+  selfCheckRounds: 2,
 } as const;
 
 /**
  * 自研 ReAct 循环：模型思考 → 工具调用 → 观察回灌 → 再思考，直到不再请求工具或命中终止条件。
  *
- * 本类只做编排，不掺防护逻辑：重试、熔断、预算、去重都在 ToolRegistry 的中间件链上（见 ADR-0002）。
+ * 工具调用链上的防护（重试、熔断、预算、去重）都在 ToolRegistry 的中间件链上（见 ADR-0002）；
+ * 本类只额外持有「交付前核查」——它看的是最终答案，挂不到工具调用链上。
  * 终止条件：模型不再请求工具（completed）、步数用尽（max_steps）、原地打转（no_progress）、
  * 两个工具之间来回横跳（loop_detected）、墙钟超限（timeout）、外部取消（cancelled）。
  *
@@ -122,6 +171,9 @@ export class AgentLoop {
   private readonly maxDurationMs: number;
   private readonly now: () => number;
   private readonly systemPrompt: string;
+  private readonly sourceConstraint?: AgentLoopOptions['sourceConstraint'];
+  private readonly selfCheck?: AgentLoopOptions['selfCheck'];
+  private readonly checker?: SelfChecker;
   private readonly confirm?: AgentLoopOptions['confirm'];
   private readonly signal?: AbortSignal;
   private readonly checkpoint?: CheckpointOptions;
@@ -133,7 +185,18 @@ export class AgentLoop {
   constructor(deps: AgentLoopDeps) {
     this.model = deps.model;
     this.tools = deps.tools;
-    this.systemPrompt = deps.options?.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
+    this.sourceConstraint = deps.options?.sourceConstraint;
+    this.selfCheck = deps.options?.selfCheck;
+    this.checker =
+      deps.options?.selfCheck?.enabled
+        ? new SelfChecker(deps.options.selfCheck.model ?? deps.model)
+        : undefined;
+    const basePrompt = deps.options?.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
+    // 要查标注，就得先告诉模型标注怎么写，否则等于用没约定过的格式去判它违规
+    this.systemPrompt =
+      this.sourceConstraint?.enabled === true
+        ? `${basePrompt}\n\n${CITATION_INSTRUCTION}`
+        : basePrompt;
     this.maxSteps = deps.options?.maxSteps ?? DEFAULTS.maxSteps;
     this.temperature = deps.options?.temperature ?? DEFAULTS.temperature;
     this.maxTokens = deps.options?.maxTokens ?? DEFAULTS.maxTokens;
@@ -283,6 +346,7 @@ export class AgentLoop {
       fingerprints: [],
       usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       executed: [],
+      revisions: 0,
     };
 
     if (restored) {
@@ -332,7 +396,20 @@ export class AgentLoop {
       state.steps = current;
       await this.persist(state);
 
-      if (toolCalls.length === 0) return this.finish(state, 'completed');
+      if (toolCalls.length === 0) {
+        const review = await this.reviewAnswer(state, turn.content);
+        if (this.timedOut) return this.finishTimeout(state);
+        if (!review.revise) {
+          const detail = review.issues.length
+            ? `交付前核查未通过：${review.issues.length} 个问题`
+            : undefined;
+          return this.finish(state, 'completed', detail);
+        }
+        // 不直接改答案：把具体问题回灌给模型，让它自己修正（生成与判断分离）
+        this.messages.push({ role: 'user', content: review.feedback });
+        await this.persist(state);
+        continue;
+      }
 
       state.executed.push(...toolCalls);
       state.fingerprints.push(fingerprint(toolCalls));
@@ -362,6 +439,60 @@ export class AgentLoop {
     }
 
     return this.finish(state, 'max_steps');
+  }
+
+  /**
+   * 交付前核查：来源约束（确定性） + 自我核查（模型判断）。
+   * 两层都关时零开销，直接放行。
+   */
+  private async reviewAnswer(
+    state: RunState,
+    answer: string,
+  ): Promise<{ revise: boolean; issues: string[]; feedback: string }> {
+    const issues: string[] = [];
+    let degraded = false;
+    let degradedReason: string | undefined;
+
+    if (this.sourceConstraint?.enabled) {
+      const report = checkCitations(answer, this.messages, {
+        requireCitation: this.sourceConstraint.requireCitation,
+      });
+      issues.push(...report.findings.map((finding) => finding.detail));
+    }
+
+    if (this.checker) {
+      const verdict = await this.checker.check(
+        { question: state.input, answer, messages: this.messages },
+        this.runSignal,
+      );
+      degraded = verdict.degraded;
+      degradedReason = verdict.degradedReason;
+      if (!verdict.ok) issues.push(...verdict.issues);
+    }
+
+    if (this.sourceConstraint?.enabled || this.checker) {
+      state.verification = {
+        rounds: state.revisions,
+        passed: issues.length === 0,
+        issues,
+        degraded,
+        ...(degradedReason ? { degradedReason } : {}),
+      };
+    }
+
+    const maxRounds = this.selfCheck?.maxRounds ?? DEFAULTS.selfCheckRounds;
+    const revise = issues.length > 0 && state.revisions < maxRounds;
+    if (revise) state.revisions++;
+
+    return {
+      revise,
+      issues,
+      feedback: [
+        '【交付前核查 · 请修正】下面这些问题必须先解决，再重新给出最终答案：',
+        ...issues.map((issue) => `- ${issue}`),
+        '修正后给出完整答案；确实无法修正时，明确说明缺什么信息，不要编造。',
+      ].join('\n'),
+    };
   }
 
   /**
@@ -503,6 +634,7 @@ export class AgentLoop {
       steps: state.steps,
       stopReason,
       ...(stopDetail ? { stopDetail } : {}),
+      ...(state.verification ? { verification: state.verification } : {}),
       messages: [...this.messages],
       toolCalls: [...state.executed],
       usage: { ...state.usage },

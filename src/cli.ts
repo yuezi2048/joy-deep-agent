@@ -39,6 +39,9 @@ async function main(): Promise<void> {
     tools,
     options: {
       maxSteps: 8,
+      // 幻觉防护：开了就要求结论标注来源，并在交付前多跑一次核查
+      sourceConstraint: { enabled: process.env.AGENT_SOURCE_CONSTRAINT === 'true' },
+      selfCheck: { enabled: process.env.AGENT_SELF_CHECK === 'true' },
       confirm: async (call, definition) => {
         const answer = await rl.question(
           `\n⚠️  需要确认：${definition.description}\n   参数：${JSON.stringify(call.arguments)}\n   执行？(y/N) `,

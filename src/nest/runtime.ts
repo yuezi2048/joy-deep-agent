@@ -1,3 +1,4 @@
+import type { AgentLoopOptions } from '../core/agent-loop.js';
 import type { ChatModel } from '../providers/chat-model.js';
 import {
   FailoverChatModel,
@@ -16,6 +17,8 @@ export interface AgentRuntime {
   tools: ToolRegistry;
   /** 故障转移下可查每个供应商的熔断状态；只有一家供应商时为 undefined */
   providerStates?: () => ProviderState[];
+  /** 编排层选项（幻觉防护开关等），由 AgentService 透传给 AgentLoop */
+  loopOptions?: AgentLoopOptions;
 }
 
 export interface AgentRuntimeOptions {
@@ -69,5 +72,12 @@ export function createAgentRuntime(options: AgentRuntimeOptions = {}): AgentRunt
   const tools = new ToolRegistry().registerAll(builtin);
   applyDefaultToolMiddleware(tools, { timeoutMs: options.commandTimeoutMs ?? 30_000 });
 
-  return { model, tools, providerStates };
+  // 幻觉防护默认关：开了会要求模型给结论标注来源、交付前多一次核查，
+  // 是「更可信但更慢更贵」的取舍，交给使用方明确开启（见 .env.example）。
+  const loopOptions: AgentLoopOptions = {
+    sourceConstraint: { enabled: env.AGENT_SOURCE_CONSTRAINT === 'true' },
+    selfCheck: { enabled: env.AGENT_SELF_CHECK === 'true' },
+  };
+
+  return { model, tools, providerStates, loopOptions };
 }

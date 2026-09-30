@@ -79,7 +79,10 @@ export function multiToolTurn(
 export class StubChatModel implements ChatModel {
   readonly supportsTools = true;
   readonly model = 'stub-1';
+  /** 被调用次数 */
   calls = 0;
+  /** 收到过的请求，供断言使用 */
+  readonly requests: ChatRequest[] = [];
   behavior: (request: ChatRequest) => Promise<ChatResponse>;
   streamBehavior?: (request: ChatRequest) => AsyncIterable<StreamChunk>;
 
@@ -94,11 +97,13 @@ export class StubChatModel implements ChatModel {
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
     this.calls++;
+    this.requests.push(request);
     return this.behavior(request);
   }
 
   chatStream(request: ChatRequest): AsyncIterable<StreamChunk> {
     this.calls++;
+    this.requests.push(request);
     return this.streamBehavior ? this.streamBehavior(request) : toStream(this.behavior(request));
   }
 }
