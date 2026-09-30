@@ -134,6 +134,15 @@ export interface AgentLoopOptions {
    * 预置的消息不占步数，只是开场白；`reset()` 会连它一起清掉。
    */
   initialMessages?: readonly ChatMessage[];
+  /**
+   * 本次输入专用的额外系统提示（Skill 的落点，见 ADR-0009）：每轮执行前调一次，
+   * 返回值追加到 system prompt 后面。
+   *
+   * 为什么是注入一个函数而不是让这里认识 Skill：主循环不该知道技能文件长什么样、放在哪个目录、
+   * 怎么判触发条件——那是 `src/skills/` 的事。循环只负责「拿到一段话，拼进提示词」。
+   * 返回值里的空白会被去掉；返回空串等于没注入。
+   */
+  augmentPrompt?: (input: string) => string | Promise<string>;
 }
 
 export interface AgentLoopDeps {
@@ -184,7 +193,10 @@ export class AgentLoop {
   private readonly confirm?: AgentLoopOptions['confirm'];
   private readonly signal?: AbortSignal;
   private readonly checkpoint?: CheckpointOptions;
+  private readonly augmentPrompt?: AgentLoopOptions['augmentPrompt'];
   private readonly messages: ChatMessage[] = [];
+  /** 本次执行由 `augmentPrompt` 产出的提示片段；每次 drive 重算，跑完清掉 */
+  private promptExtra = '';
   /** 本次执行的有效信号：调用方信号 + 墙钟到点后的内部掐断。工具与模型都看它。 */
   private runSignal?: AbortSignal;
   private timedOut = false;
@@ -215,6 +227,7 @@ export class AgentLoop {
     this.confirm = deps.options?.confirm;
     this.signal = deps.options?.signal;
     this.checkpoint = deps.options?.checkpoint;
+    this.augmentPrompt = deps.options?.augmentPrompt;
     if (deps.options?.initialMessages?.length) {
       this.messages.push(...deps.options.initialMessages.map((message) => ({ ...message })));
     }
@@ -339,6 +352,7 @@ export class AgentLoop {
     } finally {
       if (timer) clearTimeout(timer);
       this.runSignal = undefined;
+      this.promptExtra = '';
     }
   }
 
@@ -348,6 +362,9 @@ export class AgentLoop {
     emit: ((event: AgentEvent) => void) | null,
   ): Promise<AgentRunResult> {
     this.tools.resetState();
+    if (this.augmentPrompt) {
+      this.promptExtra = (await this.augmentPrompt(input)).trim();
+    }
 
     const state: RunState = {
       input,
@@ -562,7 +579,7 @@ export class AgentLoop {
     emit?.({ type: 'tool_call', call });
 
     const definition = this.tools.get(call.name);
-    const needsApproval = definition?.requiresConfirmation === true;
+    const needsApproval = definition ? await this.needsApproval(definition, call) : false;
     let result: ToolResult;
 
     if (needsApproval && definition && !(await this.approve(call, definition))) {
@@ -583,6 +600,20 @@ export class AgentLoop {
     emit?.({ type: 'tool_result', call, result });
   }
 
+  /**
+   * `requiresConfirmation` 可以是布尔，也可以按参数延迟判定。
+   * 判定本身抛错时按「需要确认」处理：宁可多问一句，也不让一个判不出来的写操作直接放行。
+   */
+  private async needsApproval(definition: ToolDefinition, call: ToolCall): Promise<boolean> {
+    const gate = definition.requiresConfirmation;
+    if (typeof gate !== 'function') return gate === true;
+    try {
+      return await gate(call.arguments);
+    } catch {
+      return true;
+    }
+  }
+
   private async approve(call: ToolCall, definition: ToolDefinition): Promise<boolean> {
     if (!this.confirm) return false;
     try {
@@ -593,8 +624,11 @@ export class AgentLoop {
   }
 
   private buildRequest(): ChatRequest {
+    const systemPrompt = this.promptExtra
+      ? `${this.systemPrompt}\n\n${this.promptExtra}`
+      : this.systemPrompt;
     const request: ChatRequest = {
-      messages: [{ role: 'system', content: this.systemPrompt }, ...this.messages],
+      messages: [{ role: 'system', content: systemPrompt }, ...this.messages],
       temperature: this.temperature,
       maxTokens: this.maxTokens,
     };

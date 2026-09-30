@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import type { AgentLoopOptions } from './core/agent-loop.js';
 import type { ToolDefinition } from './core/types.js';
 import type { ChatModel } from './providers/chat-model.js';
@@ -10,8 +11,10 @@ import {
 } from './providers/index.js';
 import { createProtocolTools, type ProtocolWiringOptions } from './protocols/index.js';
 import { applyDefaultToolMiddleware, withContextBudget } from './robust/index.js';
+import { SkillRegistry } from './skills/index.js';
 import { createBuiltinTools } from './tools/builtin/index.js';
 import { ToolRegistry } from './tools/registry.js';
+import { WorkspaceSandbox, type SandboxLimits } from './vfs/index.js';
 
 /** 装配产物：编排层只依赖这两个抽象，不认识具体供应商与工具实现。 */
 export interface AgentRuntime {
@@ -23,6 +26,10 @@ export interface AgentRuntime {
   loopOptions?: AgentLoopOptions;
   /** 关掉协议层拉起的资源（MCP 子进程等）。没有接协议时为空。 */
   close?: () => Promise<void>;
+  /** 工作区沙箱：挂载表、写盘配额与审计都在它身上，启动时可打印挂载点 */
+  sandbox?: WorkspaceSandbox;
+  /** 技能加载器：入口可以打印加载到的技能与 problems */
+  skills?: SkillRegistry;
   /**
    * 派生一个只含白名单工具的注册表；不传就是全量。名字写错会立刻报错，不静默少工具。
    *
@@ -35,6 +42,17 @@ export interface AgentRuntime {
 
 export interface AgentRuntimeOptions {
   workspaceRoot?: string;
+  /** 收窄写盘（相对工作区）；不传则读 `AGENT_WRITE_ROOT`，再没有就全工作区可写 */
+  writeRoot?: string;
+  /** 写盘配额；不传则读 AGENT_MAX_FILE_BYTES / AGENT_MAX_TOTAL_BYTES / AGENT_MAX_FILES */
+  limits?: SandboxLimits;
+  /** 技能目录（相对工作区）；不传则读 AGENT_SKILLS_DIR，再没有就用 .joy-agent/skills */
+  skillsDir?: string;
+  /**
+   * HITL 确认钩子。入口自己持有输入通道（比如 CLI 的 readline）并从装配点传进来——
+   * 谁拥有 stdin 谁提供 ask，工具层不再偷偷建第二个输入接口（原型复盘第 5 条）。
+   */
+  confirm?: AgentLoopOptions['confirm'];
   providerKey?: string;
   allowedCommands?: readonly string[];
   commandTimeoutMs?: number;
@@ -50,8 +68,11 @@ export interface AgentRuntimeOptions {
  */
 export async function createAgentRuntime(options: AgentRuntimeOptions = {}): Promise<AgentRuntime> {
   const env = process.env;
+  const workspaceRoot = options.workspaceRoot ?? process.cwd();
   const providers = buildProviders();
   const logFailover = options.logFailover ?? true;
+  const writeRoot = options.writeRoot ?? env.AGENT_WRITE_ROOT;
+  const limits = readLimits(env, options.limits);
 
   // 主供应商打头，其余按 priority 兜底；转移对 AgentLoop 透明
   const routed = createFailoverModel(providers, {
@@ -80,8 +101,14 @@ export async function createAgentRuntime(options: AgentRuntimeOptions = {}): Pro
   // 协议工具（MCP 工具来源 / A2A delegate）与内置工具进同一个注册表：中间件、HITL、依赖序一视同仁
   const protocol = await createProtocolTools(options.protocolOptions ?? {});
 
+  const sandbox = new WorkspaceSandbox({
+    root: workspaceRoot,
+    ...(writeRoot ? { writeRoot } : {}),
+    ...(limits ? { limits } : {}),
+  });
+
   const builtin = createBuiltinTools({
-    workspaceRoot: options.workspaceRoot ?? process.cwd(),
+    sandbox,
     allowedCommands: options.allowedCommands,
     commandTimeoutMs: options.commandTimeoutMs,
   });
@@ -97,14 +124,47 @@ export async function createAgentRuntime(options: AgentRuntimeOptions = {}): Pro
 
   const tools = forkTools();
 
+  // 技能：每轮按输入匹配触发条件，命中才注入提示词；目录不在就等于没有技能（不是错误）
+  const skillTokens = readLimit('AGENT_SKILL_TOKENS', env);
+  const skills = new SkillRegistry({
+    dir: resolve(workspaceRoot, options.skillsDir ?? env.AGENT_SKILLS_DIR ?? '.joy-agent/skills'),
+    root: workspaceRoot,
+  });
+
   // 幻觉防护默认关：开了会要求模型给结论标注来源、交付前多一次核查，
   // 是「更可信但更慢更贵」的取舍，交给使用方明确开启（见 .env.example）。
   const loopOptions: AgentLoopOptions = {
     sourceConstraint: { enabled: env.AGENT_SOURCE_CONSTRAINT === 'true' },
     selfCheck: { enabled: env.AGENT_SELF_CHECK === 'true' },
+    augmentPrompt: (input) =>
+      skills.promptFor(input, skillTokens !== undefined ? { maxTokens: skillTokens } : {}),
+    ...(options.confirm ? { confirm: options.confirm } : {}),
   };
 
-  return { model, tools, providerStates, loopOptions, close: protocol.close, forkTools };
+  return { model, tools, providerStates, loopOptions, close: protocol.close, sandbox, skills, forkTools };
+}
+
+/** 写盘配额：环境变量打底，显式传入的覆盖它。没配的项交给 WorkspaceSandbox 的缺省值。 */
+function readLimits(env: NodeJS.ProcessEnv, overrides?: SandboxLimits): SandboxLimits {
+  const limits: SandboxLimits = {};
+  const maxFileBytes = readLimit('AGENT_MAX_FILE_BYTES', env);
+  if (maxFileBytes !== undefined) limits.maxFileBytes = maxFileBytes;
+  const maxTotalBytes = readLimit('AGENT_MAX_TOTAL_BYTES', env);
+  if (maxTotalBytes !== undefined) limits.maxTotalBytes = maxTotalBytes;
+  const maxFiles = readLimit('AGENT_MAX_FILES', env);
+  if (maxFiles !== undefined) limits.maxFiles = maxFiles;
+  return { ...limits, ...overrides };
+}
+
+/** 读一个可选的正整数配置：没配返回 undefined，配错直接报错（不静默取默认值）。 */
+function readLimit(name: string, env: NodeJS.ProcessEnv): number | undefined {
+  const raw = env[name];
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} 必须是正整数，收到 "${raw}"`);
+  }
+  return parsed;
 }
 
 /** 按白名单挑工具。写错名字直接报错：静默少一个工具会变成很难查的「模型怎么不用它」。 */

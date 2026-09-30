@@ -15,7 +15,7 @@
 pnpm install
 cp .env.example .env        # 至少填一个供应商的 Key
 
-pnpm test                   # 350 个单测，全部走假模型，不烧 API
+pnpm test                   # 409 个单测，全部走假模型，不烧 API
 pnpm eval                   # 跑故障注入评测，输出 docs/eval/report-<日期>.md
 pnpm verify                 # 单测 + 评测门禁（CI 跑的就是这一条）
 pnpm start                  # 起 Harness：http://localhost:3000
@@ -67,6 +67,49 @@ pnpm run report -- "对比三个候选方案，产出一份选型建议"
 
 入口在不配模型 Key 时只打印可读提示并非零退出，不抛栈。
 
+## Skill 与沙箱
+
+**Skill 按触发条件注入**（ADR-0009）：一个技能一个目录，放一份 `SKILL.md`：
+
+```markdown
+---
+name: weekly-report
+description: 把零散材料整理成周报
+triggers:
+  - 周报                      # 关键词：大小写不敏感子串
+  - /weekly\s*report/i        # 或者正则
+references:
+  - templates/report.md       # 相对技能目录；只注入清单，正文按需 read_file
+---
+
+正文：这个技能具体怎么做。
+```
+
+```bash
+AGENT_SKILLS_DIR=examples/skills pnpm run demo    # 仓库里带了一个示例技能
+```
+
+触发条件由**代码**判定：命中才把技能注入 system prompt，没命中的一个字符都不注入（原型是把全部技能
+塞进提示词再求模型自己挑，token 随技能数量线性膨胀）。改 / 加 / 删 `SKILL.md` 后下一轮就生效，不用重启；
+解析不了的文件不会被静默吞掉，会连同理由一起报出来。技能也会注入到编排层的子智能体
+（每步子任务各匹配一次）——子智能体不共享主循环上下文，技能得各自算。
+`references` 在 `SKILL.md` 里相对**技能目录**写，注入时由代码换算成**相对工作区**的路径——
+和 `read_file` 同一个坐标系，模型拿到就能直接读。
+
+**VFS 沙箱受限写盘**（ADR-0008）：读可以看整个工作区，写只能落在可写的挂载点内——默认不收窄
+（与从前一致），配了 `AGENT_WRITE_ROOT` 才收窄成「工作区只读 + 该子目录可写」。写盘还有配额
+（单文件 / 累计字节 / 文件数）与审计记录（路径 / 字节 / 时间 / 挂载 / 触发它的调用 id），
+配额在**落盘之前**判定，文件数按去重后的文件算（覆盖同一个文件不重复占额）。越界 / 超配额的写入
+**不弹人工确认**，直接回一条可读拒绝——HITL 只花在真能改世界的事上。
+
+```bash
+AGENT_WRITE_ROOT=.joy-agent pnpm run demo    # 读全工作区，只准往 .joy-agent 写
+```
+
+两处诚实的边界：符号链接绕行用 `realpath` 挡住了（原型用字符串前缀判定，`/out-evil` 会被当成 `/out` 的子路径），
+但这仍是**进程内的路径约束**，拦的是模型误操作，不是对抗恶意代码的隔离；`run_command` 走命令白名单那条路，
+它的写盘不在这层管辖内。
+
 ## 当前状态
 
 | 部分 | 位置 | 状态 |
@@ -84,7 +127,8 @@ pnpm run report -- "对比三个候选方案，产出一份选型建议"
 | NestJS 服务化 + SSE 流式接口 | `src/nest/`、`src/main.ts` | **已实现**，含单测 |
 | 上下文溢出治理（token 估算 / 滑动窗口 / 摘要压缩） | `src/robust/context-manager.ts` | **已实现**，含单测 |
 | 用户中断（Checkpoint / Resume） | `src/memory/`、`src/core/agent-loop.ts` | **已实现**，含单测（取消落盘、续跑不重复副作用、原子写） |
-| Skill 热插拔、VFS 沙箱 | 待迁（原型 `deep-agent-demo`） | 未开始 |
+| Skill 按触发条件注入（`SKILL.md` 热插拔 + 预算截断） | `src/skills/` | **已实现**，含单测 |
+| VFS 沙箱受限写盘（挂载表 + realpath 校验 + 配额 + 审计） | `src/vfs/` | **已实现**，含单测 |
 | MCP / A2A 接入（MCP 工具来源 + A2A `delegate` + 本机 A2A 端点） | `src/protocols/`、`src/nest/a2a.controller.ts` | **已实现**，含单测 |
 | Planner + 多智能体编排（规划 → 子智能体分波并发 → 汇总 → 结构化落盘） | `src/orchestrator/` | **已实现**，含单测；入口 `pnpm run report` |
 | 记忆（短期会话历史 + 长期记忆，`AGENT_MEMORY=memory\|file` 可跨进程重启） | `src/memory/memory-store.ts` | **已实现**，含单测 |
@@ -120,8 +164,9 @@ CI 里跑 `pnpm verify`（单测 + `pnpm eval:gate`）：**加固侧不许比基
 joy-deep-agent/
 ├── AGENTS.md            # 给编码 agent 的工作说明
 ├── CONTEXT.md           # 领域词汇表（持续维护）
-├── docs/adr/            # 架构决策记录（已定 7 条）
+├── docs/adr/            # 架构决策记录（已定 9 条）
 ├── docs/eval/           # 评测口径与报告模板
+├── examples/skills/     # 示例技能包（AGENT_SKILLS_DIR=examples/skills 即可用）
 ├── prototypes/          # 冻结的三份原始 demo，只读
 └── src/
     ├── core/            # AgentLoop、消息类型、错误分类、异步队列
@@ -132,6 +177,8 @@ joy-deep-agent/
     ├── memory/          # Checkpoint / Memory 持久化接口与实现
     ├── security/        # 路径防护
     ├── orchestrator/    # Planner、角色与子智能体、分波并发、汇总与报告落盘
+    ├── skills/          # SKILL.md 解析、热插拔加载、按触发条件注入
+    ├── vfs/             # 挂载表、受约束的读写、写盘配额与审计
     ├── nest/            # NestJS 模块、控制器、SSE
     ├── runtime.ts       # 模型 + 工具 + 中间件的装配（不含 Nest 依赖）
     └── cli.ts / orchestrate.ts / main.ts  # 三个入口：REPL / 编排报告 / HTTP 服务

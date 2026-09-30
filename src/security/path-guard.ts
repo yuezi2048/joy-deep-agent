@@ -28,7 +28,15 @@ export class PathGuard {
   }
 
   isInside(candidate: string): boolean {
-    const rel = relative(this.root, candidate);
-    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+    return isWithin(this.root, candidate);
   }
+}
+
+/**
+ * 候选路径是否在 root 之内。按**相对路径**判定，而不是前缀字符串比较——
+ * `/workspace/output-evil` 不是 `/workspace/output` 的子路径，字符串前缀会把它放进来。
+ */
+export function isWithin(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }

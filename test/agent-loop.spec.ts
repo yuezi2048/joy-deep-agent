@@ -237,6 +237,64 @@ describe('AgentLoop · HITL 高风险操作确认', () => {
 
     expect(handler).not.toHaveBeenCalled();
   });
+
+  it('延迟判定为 false 时不打扰确认，工具照常执行（越界 / 超配额走这条）', async () => {
+    const handler = vi.fn(async () => '拒绝：写盘越界，文件没有落盘');
+    const confirm = vi.fn(async () => true);
+    const tools = new ToolRegistry().register({
+      name: 'write_file',
+      description: '写文件',
+      schema: z.object({ path: z.string() }),
+      handler,
+      requiresConfirmation: async () => false,
+    } satisfies ToolDefinition);
+    const model = new FakeChatModel([toolTurn('write_file', { path: '../x' }), answerTurn('知道了')]);
+
+    await new AgentLoop({ model, tools, options: { confirm } }).run('写文件');
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(handler).toHaveBeenCalledTimes(1);
+    const toolMessage = model.calls[1]?.messages.find((m) => m.role === 'tool');
+    expect(toolMessage?.content).toContain('越界');
+  });
+
+  it('延迟判定为 true 时照样走确认，缺钩子就默认拒绝', async () => {
+    const handler = vi.fn(async () => '已写入');
+    const tools = new ToolRegistry().register({
+      name: 'write_file',
+      description: '写文件',
+      schema: z.object({ path: z.string() }),
+      handler,
+      requiresConfirmation: async () => true,
+    } satisfies ToolDefinition);
+    const model = new FakeChatModel([toolTurn('write_file', { path: 'a.md' }), answerTurn('没敢写')]);
+
+    await new AgentLoop({ model, tools }).run('写文件');
+
+    expect(handler).not.toHaveBeenCalled();
+    const toolMessage = model.calls[1]?.messages.find((m) => m.role === 'tool');
+    expect(toolMessage?.content).toContain('需要人工确认');
+  });
+
+  it('延迟判定本身抛错时按「需要确认」处理，不会静默放行', async () => {
+    const handler = vi.fn(async () => '已删除');
+    const confirm = vi.fn(async () => false);
+    const tools = new ToolRegistry().register({
+      name: 'delete_all',
+      description: '删除所有数据',
+      schema: z.object({}),
+      handler,
+      requiresConfirmation: async () => {
+        throw new Error('配额判定挂了');
+      },
+    } satisfies ToolDefinition);
+    const model = new FakeChatModel([toolTurn('delete_all', {}), answerTurn('算了')]);
+
+    await new AgentLoop({ model, tools, options: { confirm } }).run('清空数据');
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(handler).not.toHaveBeenCalled();
+  });
 });
 
 describe('AgentLoop · 流式执行', () => {

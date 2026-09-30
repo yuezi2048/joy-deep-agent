@@ -59,8 +59,14 @@ export interface ToolDefinition {
    * 远端工具（MCP）本来就有权威 JSON Schema，经 zod 往返会丢信息；本地校验仍走 `schema`。
    */
   parameters?: Record<string, unknown>;
-  /** 高风险操作，需要 HITL 确认后才执行 */
-  requiresConfirmation?: boolean;
+  /**
+   * 高风险操作，需要 HITL 确认后才执行。
+   *
+   * 传函数则按**本次参数**延迟判定：返回 false 表示这次调用不必打扰人。
+   * 例：`write_file` 在越界或超配额时直接回一条可读的拒绝——让人去确认一件注定失败的事，
+   * 既浪费人的注意力，也把「拒绝」伪装成了「等待授权」。
+   */
+  requiresConfirmation?: boolean | ((args: Record<string, unknown>) => boolean | Promise<boolean>);
   /**
    * 前置工具：必须先成功执行过它们，本工具才会被调用（例如「先查订单再改订单」）。
    * 未满足时返回可读反馈，工具本体不会被触达；成环在注册阶段就会报错。

@@ -1,10 +1,13 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { AgentLoop } from '../src/core/agent-loop.js';
 import { PathGuard } from '../src/security/path-guard.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { createBuiltinTools, evaluateExpression, safeExec } from '../src/tools/builtin/index.js';
+import { WorkspaceSandbox } from '../src/vfs/index.js';
+import { FakeChatModel, answerTurn, toolTurn } from './helpers/fake-model.js';
 
 const toolCall = (name: string, args: Record<string, unknown>) => ({
   id: 'c1',
@@ -124,7 +127,7 @@ describe('createBuiltinTools 与注册表集成', () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
-  it('注册五个内置工具，写文件默认需要确认', () => {
+  it('注册五个内置工具，写文件默认需要确认', async () => {
     const tools = createBuiltinTools({ workspaceRoot: workspace });
     const registry = new ToolRegistry().registerAll(tools);
 
@@ -135,7 +138,13 @@ describe('createBuiltinTools 与注册表集成', () => {
       'run_command',
       'write_file',
     ]);
-    expect(registry.get('write_file')?.requiresConfirmation).toBe(true);
+
+    // 确认判定按参数延迟给：能写才问人，注定失败的写入不打扰人（见 ADR-0008）
+    const gate = registry.get('write_file')?.requiresConfirmation;
+    expect(typeof gate).toBe('function');
+    const ask = gate as (args: Record<string, unknown>) => Promise<boolean>;
+    expect(await ask({ path: 'a.md', content: 'x' })).toBe(true);
+    expect(await ask({ path: '../escape.md', content: 'x' })).toBe(false);
   });
 
   it('写文件后能读回来', async () => {
@@ -170,5 +179,131 @@ describe('createBuiltinTools 与注册表集成', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content).toContain('白名单');
+  });
+});
+
+describe('createBuiltinTools · VFS 沙箱受限写盘（ADR-0008）', () => {
+  let workspace: string;
+  let outside: string;
+
+  beforeAll(async () => {
+    workspace = await mkdtemp(join(tmpdir(), 'joy-vfs-tools-'));
+    outside = await mkdtemp(join(tmpdir(), 'joy-vfs-outside-'));
+    await writeFile(join(workspace, 'readable.md'), '读得到的源码', 'utf8');
+  });
+
+  afterAll(async () => {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  const exists = (path: string) => access(path).then(() => true, () => false);
+
+  it('收窄写盘后：只能写该子目录，工作区其他地方读得到但写不了', async () => {
+    const registry = new ToolRegistry().registerAll(
+      createBuiltinTools({ sandbox: new WorkspaceSandbox({ root: workspace, writeRoot: 'out' }) }),
+    );
+
+    const written = await registry.execute(toolCall('write_file', { path: 'out/a.md', content: '好' }));
+    expect(written.isError).toBeUndefined();
+
+    const denied = await registry.execute(toolCall('write_file', { path: 'stray.md', content: 'x' }));
+    expect(denied.isError).toBe(true);
+    expect(denied.content).toContain('只读挂载点');
+
+    const read = await registry.execute(toolCall('read_file', { path: 'readable.md' }));
+    expect(read.content).toBe('读得到的源码');
+  });
+
+  it('写盘越界被拦成可读反馈，不抛穿循环', async () => {
+    const registry = new ToolRegistry().registerAll(
+      createBuiltinTools({ sandbox: new WorkspaceSandbox({ root: workspace, writeRoot: 'out' }) }),
+    );
+
+    const result = await registry.execute(toolCall('write_file', { path: '../escape.md', content: 'x' }));
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('越界');
+  });
+
+  it('配额超限时给出可读理由，且文件真的没有落盘', async () => {
+    const registry = new ToolRegistry().registerAll(
+      createBuiltinTools({ sandbox: new WorkspaceSandbox({ root: workspace, limits: { maxFileBytes: 4 } }) }),
+    );
+
+    const result = await registry.execute(toolCall('write_file', { path: 'big.md', content: '12345' }));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('超过单文件上限');
+    expect(await exists(join(workspace, 'big.md'))).toBe(false);
+  });
+
+  it('符号链接指向工作区外时被拒', async () => {
+    await symlink(outside, join(workspace, 'escape-hatch'));
+    const registry = new ToolRegistry().registerAll(createBuiltinTools({ workspaceRoot: workspace }));
+
+    const written = await registry.execute(
+      toolCall('write_file', { path: 'escape-hatch/planted.md', content: 'x' }),
+    );
+
+    expect(written.isError).toBe(true);
+    expect(written.content).toContain('真实位置越出沙箱');
+    expect(await exists(join(outside, 'planted.md'))).toBe(false);
+  });
+
+  it('越界 / 超配额的写入不弹确认，直接把可读拒绝回灌给模型', async () => {
+    const confirm = vi.fn(async () => true);
+    const denied = new ToolRegistry().registerAll(
+      createBuiltinTools({ sandbox: new WorkspaceSandbox({ root: workspace, writeRoot: 'out' }) }),
+    );
+
+    const strayModel = new FakeChatModel([
+      toolTurn('write_file', { path: 'stray.md', content: 'x' }),
+      answerTurn('那我写 out/ 里'),
+    ]);
+    await new AgentLoop({ model: strayModel, tools: denied, options: { confirm } }).run('写文件');
+    expect(confirm).not.toHaveBeenCalled();
+    expect(strayModel.calls[1]?.messages.find((m) => m.role === 'tool')?.content).toContain(
+      '只读挂载点',
+    );
+
+    const overQuota = new ToolRegistry().registerAll(
+      createBuiltinTools({ sandbox: new WorkspaceSandbox({ root: workspace, limits: { maxFileBytes: 4 } }) }),
+    );
+    const bigModel = new FakeChatModel([
+      toolTurn('write_file', { path: 'big.md', content: '12345' }),
+      answerTurn('收到'),
+    ]);
+    await new AgentLoop({ model: bigModel, tools: overQuota, options: { confirm } }).run('写文件');
+    expect(confirm).not.toHaveBeenCalled();
+    expect(bigModel.calls[1]?.messages.find((m) => m.role === 'tool')?.content).toContain(
+      '超过单文件上限',
+    );
+  });
+
+  it('能写成的写入仍然走确认：确认钩子点头才落盘，审计带上触发调用 id', async () => {
+    const confirm = vi.fn(async () => true);
+    const sandbox = new WorkspaceSandbox({ root: workspace, writeRoot: 'out' });
+    const registry = new ToolRegistry().registerAll(createBuiltinTools({ sandbox }));
+    const model = new FakeChatModel([
+      toolTurn('write_file', { path: 'out/ok.md', content: '好' }),
+      toolTurn('write_file', { path: 'out/again.md', content: '再来' }, 'call_2'),
+      answerTurn('写完了'),
+    ]);
+
+    await new AgentLoop({ model, tools: registry, options: { confirm } }).run('连写两个文件');
+
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(await exists(join(workspace, 'out/ok.md'))).toBe(true);
+    const audited = sandbox.audit().map((record) => record.callId ?? '');
+    expect(audited[0]).toContain('call_1');
+    expect(audited[1]).toContain('call_2');
+  });
+
+  it('write_file 的返回写的是字节数，不是字符数', async () => {
+    const registry = new ToolRegistry().registerAll(createBuiltinTools({ workspaceRoot: workspace }));
+
+    const result = await registry.execute(toolCall('write_file', { path: 'cn.md', content: '你好' }));
+
+    expect(result.content).toBe('已写入 cn.md（6 字节）');
   });
 });

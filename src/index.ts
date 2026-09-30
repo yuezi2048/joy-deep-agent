@@ -44,6 +44,8 @@ export {
 export * from './memory/index.js';
 export * from './protocols/index.js';
 export * from './orchestrator/index.js';
+export * from './skills/index.js';
+export * from './vfs/index.js';
 export * from './providers/index.js';
 export * from './robust/index.js';
 export * from './eval/index.js';

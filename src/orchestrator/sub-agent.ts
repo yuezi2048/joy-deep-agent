@@ -20,6 +20,8 @@ export interface SubAgentDeps {
   maxDurationMs?: number;
   /** HITL 确认钩子；不传时需确认的工具会被拒绝（沿用 AgentLoop 的安全默认） */
   confirm?: AgentLoopOptions['confirm'];
+  /** 每步子任务执行前注入的提示片段（技能命中才非空）；不传就不注入 */
+  augmentPrompt?: AgentLoopOptions['augmentPrompt'];
   now?: () => number;
 }
 
@@ -43,6 +45,7 @@ export class SubAgent {
         ...(this.deps.maxSteps !== undefined ? { maxSteps: this.deps.maxSteps } : {}),
         ...(this.deps.maxDurationMs !== undefined ? { maxDurationMs: this.deps.maxDurationMs } : {}),
         ...(this.deps.confirm ? { confirm: this.deps.confirm } : {}),
+        ...(this.deps.augmentPrompt ? { augmentPrompt: this.deps.augmentPrompt } : {}),
         ...(this.deps.now ? { now: this.deps.now } : {}),
         ...(options.signal ? { signal: options.signal } : {}),
       },

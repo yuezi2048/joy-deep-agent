@@ -22,7 +22,8 @@ export const USAGE = `用法：pnpm run report -- "<目标>"
 
 Planner 拆解 → 子智能体分波并发 → 主模型汇总 → 落盘（Markdown + JSON）。
 环境变量：AGENT_MEMORY（缺省 memory；想跨次累积长期记忆就设 file）、AGENT_MEMORY_DIR、
-         AGENT_MEMORY_SCOPE、AGENT_REPORT_DIR、AGENT_MAX_PARALLEL、AGENT_PLAN_MAX_STEPS。`;
+         AGENT_MEMORY_SCOPE、AGENT_REPORT_DIR、AGENT_MAX_PARALLEL、AGENT_PLAN_MAX_STEPS、
+         AGENT_SKILLS_DIR、AGENT_SKILL_TOKENS、AGENT_WRITE_ROOT、AGENT_MAX_*（写盘配额）。`;
 
 export interface OrchestrateOptions {
   goal: string;
@@ -98,10 +99,28 @@ export async function orchestrate(options: OrchestrateOptions): Promise<Orchestr
       memoryScope: options.memoryScope ?? process.env.AGENT_MEMORY_SCOPE ?? 'default',
       recall: (scope, limit) => memory.recall(scope, limit),
       remember: (scope, entry) => memory.remember(scope, entry),
+      ...(runtime.loopOptions?.augmentPrompt
+        ? { augmentPrompt: runtime.loopOptions.augmentPrompt }
+        : {}),
       onEvent: (event) => printEvent(event, out),
     });
 
     out(`🧭 目标：${options.goal}`);
+    const writable = runtime.sandbox?.writableMounts() ?? [];
+    if (writable.length > 0) {
+      // 子智能体一个写盘工具都没有（落盘由编排层单点执行），这里说的是内置工具那条路的口子
+      out(
+        `🔒 沙箱可写范围：${writable.map((mount) => mount.label).join('、')}` +
+          `（子智能体无写盘工具，报告由编排层落盘）`,
+      );
+    }
+    const { skills, problems } = (await runtime.skills?.load()) ?? { skills: [], problems: [] };
+    if (skills.length > 0) {
+      out(
+        `📚 技能 ${skills.length} 个：${skills.map((skill) => skill.name).join('、')}（命中触发条件才注入）`,
+      );
+    }
+    for (const problem of problems) out(`⚠️  技能 ${problem.source} 没加载：${problem.detail}`);
     const result = await supervisor.run(options.goal);
     for (const line of summarize(result)) out(line);
     return result;

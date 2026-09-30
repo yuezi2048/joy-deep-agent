@@ -11,3 +11,5 @@
 - [ADR-0005](0005-mcp-a2a-layer.md) MCP 是工具来源，A2A 是子 agent 传输
 - [ADR-0006](0006-protocol-layer-layout.md) 协议适配独立成 `src/protocols/`
 - [ADR-0007](0007-orchestrator-layer.md) 多智能体编排独立成 `src/orchestrator/`
+- [ADR-0008](0008-vfs-sandbox.md) VFS 沙箱用挂载表 + realpath + 配额
+- [ADR-0009](0009-skill-injection.md) Skill 按触发条件注入，判断权在代码不在模型

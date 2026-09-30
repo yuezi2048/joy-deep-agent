@@ -279,6 +279,38 @@ describe('Supervisor', () => {
     expect(events).toEqual(['planned', 'wave', 'step', 'wave', 'step', 'synthesized']);
   });
 
+  it('技能注入按步各算一次，落到子智能体的 system prompt 里（ADR-0009）', async () => {
+    const model = new ProbeModel({
+      plan: twoParallelSteps,
+      subAgent: () => '产出',
+      synthesis: () => '报告',
+    });
+    const seen: string[] = [];
+
+    await makeSupervisor(model, {
+      augmentPrompt: async (input) => {
+        seen.push(input);
+        return '\n## 针对本次任务的技能说明\n\n### weekly-report\n整理周报';
+      },
+    }).run('调研 X');
+
+    // 每步子任务各调一次，且注入文本进了子智能体的 system prompt
+    expect(seen).toHaveLength(2);
+    expect(model.systems.some((system) => system.includes('weekly-report'))).toBe(true);
+  });
+
+  it('不传 augmentPrompt 时子智能体 prompt 里不会出现技能段落', async () => {
+    const model = new ProbeModel({
+      plan: twoParallelSteps,
+      subAgent: () => '产出',
+      synthesis: () => '报告',
+    });
+
+    await makeSupervisor(model).run('调研 X');
+
+    expect(model.systems.every((system) => !system.includes('技能说明'))).toBe(true);
+  });
+
   it('parsePlan 与 Supervisor 对「角色不存在」的判断一致', () => {
     const result = parsePlan({ goal: 'g', steps: [{ id: 's1', role: 'ghost', task: 't' }] }, { roles: BUILTIN_ROLES });
     expect(result.ok).toBe(false);

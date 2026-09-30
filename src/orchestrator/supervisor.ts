@@ -1,3 +1,4 @@
+import type { AgentLoopOptions } from '../core/agent-loop.js';
 import type { ChatModel } from '../providers/index.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import { addUsage, type Usage } from '../core/types.js';
@@ -40,6 +41,11 @@ export interface SupervisorDeps {
   recall?: (scope: string, limit: number) => Promise<string[]>;
   /** 写长期记忆（收尾时落一条本次结果摘要） */
   remember?: (scope: string, entry: string) => Promise<void>;
+  /**
+   * 每步子智能体执行前注入的提示片段（技能命中才非空）。
+   * 子智能体不共享主循环的上下文，技能匹配得在这里各自算一次；不传就不注入。
+   */
+  augmentPrompt?: AgentLoopOptions['augmentPrompt'];
   memoryScope?: string;
   now?: () => number;
   onEvent?: (event: SupervisorEvent) => void;
@@ -264,6 +270,7 @@ export class Supervisor {
         tools,
         ...(this.deps.maxStepsPerAgent !== undefined ? { maxSteps: this.deps.maxStepsPerAgent } : {}),
         maxDurationMs: this.deps.maxDurationPerAgent ?? DEFAULTS.maxDurationPerAgent,
+        ...(this.deps.augmentPrompt ? { augmentPrompt: this.deps.augmentPrompt } : {}),
         ...(this.deps.now ? { now: this.deps.now } : {}),
       });
 
