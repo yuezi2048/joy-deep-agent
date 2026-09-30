@@ -13,6 +13,7 @@ out/
 !.env.example
 
 # 生成/输出
+.joy-agent/
 output/
 coverage/
 *.log

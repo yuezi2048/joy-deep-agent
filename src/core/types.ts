@@ -56,6 +56,11 @@ export interface ToolDefinition {
   handler: (args: any, ctx: ToolContext) => Promise<ToolOutcome>;
   /** 高风险操作，需要 HITL 确认后才执行 */
   requiresConfirmation?: boolean;
+  /**
+   * 前置工具：必须先成功执行过它们，本工具才会被调用（例如「先查订单再改订单」）。
+   * 未满足时返回可读反馈，工具本体不会被触达；成环在注册阶段就会报错。
+   */
+  requires?: readonly string[];
 }
 
 /** 工具链上的一环。中间件包住 `next`，返回一个新的处理器。 */

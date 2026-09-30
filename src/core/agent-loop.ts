@@ -85,6 +85,8 @@ export interface AgentCheckpointState {
   fingerprints: string[];
   usage: Usage;
   executed: ToolCall[];
+  /** 已成功执行过的工具名：续跑时回填给工具注册表，前置依赖才不会被误判为未满足 */
+  completedTools?: string[];
 }
 
 /** 单次执行的可变状态。消息存在实例的 `messages` 上，核查轮数只属于本次执行，不落盘。 */
@@ -352,6 +354,7 @@ export class AgentLoop {
     if (restored) {
       this.messages.length = 0;
       this.messages.push(...restored.messages);
+      for (const name of restored.completedTools ?? []) this.tools.markCompleted(name);
       state.steps = restored.steps;
       state.lastContent = restored.lastContent;
       state.fingerprints.push(...restored.fingerprints);
@@ -602,6 +605,7 @@ export class AgentLoop {
       fingerprints: [...state.fingerprints],
       usage: { ...state.usage },
       executed: [...state.executed],
+      completedTools: this.tools.completedNames(),
     };
     await this.checkpoint.store.save(this.checkpoint.id, snapshot);
   }

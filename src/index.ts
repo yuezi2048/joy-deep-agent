@@ -29,6 +29,16 @@ export {
 } from './tools/builtin/index.js';
 
 export { PathGuard } from './security/path-guard.js';
+export {
+  PreflightError,
+  assertPreflight,
+  compareVersions,
+  formatPreflightReport,
+  runPreflight,
+  type PreflightCheck,
+  type PreflightOptions,
+  type PreflightReport,
+} from './security/preflight.js';
 
 export * from './memory/index.js';
 export * from './providers/index.js';

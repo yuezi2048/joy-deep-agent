@@ -8,10 +8,21 @@ import { stdin as input, stdout as output } from 'node:process';
 import { AgentLoop } from './core/agent-loop.js';
 import { buildProviders, createFailoverModel, formatFailoverEvent } from './providers/index.js';
 import { applyDefaultToolMiddleware } from './robust/index.js';
-import { createBuiltinTools } from './tools/builtin/index.js';
+import { formatPreflightReport, runPreflight } from './security/preflight.js';
+import { DEFAULT_ALLOWED_COMMANDS, createBuiltinTools } from './tools/builtin/index.js';
 import { ToolRegistry } from './tools/registry.js';
 
 async function main(): Promise<void> {
+  const preflight = await runPreflight({
+    workspaceRoot: process.cwd(),
+    allowedCommands: DEFAULT_ALLOWED_COMMANDS,
+  });
+  if (!preflight.ok) {
+    console.error(formatPreflightReport(preflight));
+    process.exitCode = 1;
+    return;
+  }
+
   // 多家供应商按 priority 兜底：主供应商挂了自动换下一家，主循环无感
   const model = createFailoverModel(buildProviders(), {
     primaryKey: process.env.AGENT_PROVIDER,

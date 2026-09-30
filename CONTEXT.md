@@ -10,6 +10,8 @@
 - **原地打转 / 横跳** —— 两种死循环形态：前者每步调用签名完全相同（no_progress），后者按周期重复、典型是 A/B/A/B（loop_detected）。连同步数用尽（max_steps）与墙钟超限（timeout），四种停止原因在 `AgentRunResult.stopReason` 里可区分。
 - **Memory** —— 跨步 / 跨会话状态存储（短期上下文 + 长期记忆）。
 - **ToolRegistry** —— 工具注册表：注册、发现、按 schema 校验后调用。
+- **工具依赖（requires）** —— 工具声明的前置工具，必须**成功**执行过才放行；成环在注册阶段报错。
+- **启动预检** —— 服务起来之前先查运行时版本、工作区可写、命令白名单，失败就带修复提示退出。
 - **ToolMiddleware** —— 工具调用链上的鲁棒性中间件，形如 `(next) => (call) => Promise<Result>`；8 类故障各对应一条中间件。
 - **ChatModel** —— 模型调用抽象（`chat` / `chatStream`），供应商差异由配置承载，不下渗到 AgentLoop。
 - **ProviderConfig** —— 单个模型供应商的连接配置（name / baseURL / apiKey / model / priority）。

@@ -2,8 +2,21 @@ import 'reflect-metadata';
 import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './nest/app.module.js';
+import { formatPreflightReport, runPreflight } from './security/preflight.js';
+import { DEFAULT_ALLOWED_COMMANDS } from './tools/builtin/index.js';
 
 async function bootstrap(): Promise<void> {
+  // 环境问题挡在启动之前：版本不对 / 工作区只读 / 白名单为空，都不该等任务跑到一半才炸
+  const preflight = await runPreflight({
+    workspaceRoot: process.cwd(),
+    allowedCommands: DEFAULT_ALLOWED_COMMANDS,
+  });
+  console.log(formatPreflightReport(preflight));
+  if (!preflight.ok) {
+    process.exitCode = 1;
+    return;
+  }
+
   const app = await NestFactory.create(AppModule);
   const port = Number(process.env.PORT ?? 3000);
   await app.listen(port);

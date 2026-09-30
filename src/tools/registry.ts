@@ -19,18 +19,74 @@ import { toJsonSchema } from './json-schema.js';
 export class ToolRegistry {
   private readonly definitions = new Map<string, ToolDefinition>();
   private readonly middleware: ToolMiddleware[] = [];
+  /** 本次任务里成功执行过的工具，用于前置依赖判断；resetState() 会清空 */
+  private readonly completed = new Set<string>();
 
   register(definition: ToolDefinition): this {
     if (this.definitions.has(definition.name)) {
       throw new Error(`工具 "${definition.name}" 已注册，名称必须唯一`);
     }
     this.definitions.set(definition.name, definition);
+    try {
+      this.assertAcyclic(definition.name);
+    } catch (error) {
+      // 注册失败不留半个工具在表里
+      this.definitions.delete(definition.name);
+      throw error;
+    }
     return this;
   }
 
   registerAll(definitions: readonly ToolDefinition[]): this {
     for (const definition of definitions) this.register(definition);
+    this.validateDependencies();
     return this;
+  }
+
+  /**
+   * 校验依赖图：`requires` 指向的工具必须存在。
+   * 依赖成环在 `register()` 就会报错（见 assertAcyclic），这里补的是「名字写错 / 漏注册」。
+   */
+  validateDependencies(): void {
+    const dangling: string[] = [];
+    for (const definition of this.definitions.values()) {
+      for (const required of definition.requires ?? []) {
+        if (!this.definitions.has(required)) dangling.push(`${definition.name} → ${required}`);
+      }
+    }
+    if (dangling.length > 0) {
+      throw new Error(
+        `工具依赖了未注册的工具：${dangling.join('、')}。请先注册被依赖的工具，或修正名称。`,
+      );
+    }
+  }
+
+  /** 记录某个工具已成功执行（供依赖判断）。续跑时由 AgentLoop 用检查点里的记录回填。 */
+  markCompleted(name: string): void {
+    this.completed.add(name);
+  }
+
+  /** 本次任务里已成功执行过的工具名。 */
+  completedNames(): string[] {
+    return [...this.completed];
+  }
+
+  /** 从 `name` 出发做一次深度优先搜索，回到自己就是成环。 */
+  private assertAcyclic(start: string): void {
+    const path: string[] = [];
+    const visit = (name: string): void => {
+      const loopAt = path.indexOf(name);
+      if (loopAt !== -1) {
+        const cycle = [...path.slice(loopAt), name];
+        throw new Error(`工具依赖成环：${cycle.join(' → ')}。请拆掉环，否则这批工具永远无法被调用。`);
+      }
+      const definition = this.definitions.get(name);
+      if (!definition?.requires?.length) return;
+      path.push(name);
+      for (const required of definition.requires) visit(required);
+      path.pop();
+    };
+    visit(start);
   }
 
   /** 追加一条中间件。越早追加越靠外层。 */
@@ -44,6 +100,7 @@ export class ToolRegistry {
    * 避免上一轮的状态泄漏到下一轮。
    */
   resetState(): void {
+    this.completed.clear();
     for (const middleware of this.middleware) {
       const reset = (middleware as { reset?: () => void }).reset;
       if (typeof reset === 'function') reset.call(middleware);
@@ -84,6 +141,16 @@ export class ToolRegistry {
       );
     }
 
+    // 前置依赖先于参数校验：连该不该调用都没确定，就没必要谈参数对不对
+    const missing = (definition.requires ?? []).filter((name) => !this.completed.has(name));
+    if (missing.length > 0) {
+      const list = missing.map((name) => `"${name}"`).join('、');
+      return toErrorResult(
+        `调用 "${call.name}" 之前必须先成功调用 ${list}，但本次任务里还没有它们的结果。` +
+          `请先调用 ${list} 并拿到结果，再回来调用 "${call.name}"；不要跳过前置步骤。`,
+      );
+    }
+
     const parsed = definition.schema.safeParse(call.arguments);
     if (!parsed.success) {
       const issues = parsed.error.issues
@@ -96,12 +163,16 @@ export class ToolRegistry {
 
     const validated: ToolCall = { ...call, arguments: parsed.data as Record<string, unknown> };
     const chain = this.buildChain(definition);
+    let result: ToolResult;
     try {
-      return await chain(validated);
+      result = await chain(validated);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return toErrorResult(`工具 "${call.name}" 执行失败：${message}`);
     }
+    // 只有成功才算「前置已满足」：失败的前置不该给后续动作放行
+    if (!result.isError) this.completed.add(definition.name);
+    return result;
   }
 
   private buildChain(definition: ToolDefinition): ToolHandler {
