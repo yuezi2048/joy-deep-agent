@@ -1,0 +1,21 @@
+{
+  "name": "joy-deep-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "通用 Agent 运行时（Harness）：NestJS 服务化主循环 + 8 类鲁棒性治理",
+  "packageManager": "pnpm@10.17.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {},
+  "keywords": [
+    "agent",
+    "harness",
+    "react",
+    "nestjs",
+    "mcp",
+    "a2a",
+    "llm"
+  ]
+}

@@ -1,0 +1,28 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# 密钥：永不提交
+.env
+.env.*
+!.env.example
+
+# 生成/输出
+output/
+coverage/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.idea/
+.vscode/

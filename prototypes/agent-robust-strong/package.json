@@ -1,0 +1,47 @@
+{
+  "name": "agent-robust-demo",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "通用型智能体健壮性章节配套代码：失败调用/幻觉/工具误用/死循环/上下文溢出/供应商故障/用户中断/终端环境异常",
+  "scripts": {
+    "demo:retry": "tsx src/robust/demo-retry-only.ts",
+    "demo:timeout": "tsx src/robust/demo-timeout.ts",
+    "demo:json": "tsx src/robust/demo-json.ts",
+    "demo:real": "tsx src/robust/demo-real-fail.ts",
+    "h:validator": "tsx src/robust/demo-validator.ts",
+    "h:grounding": "tsx src/robust/demo-grounding.ts",
+    "h:selfcheck": "tsx src/robust/demo-selfcheck.ts",
+    "m:dedup": "tsx src/robust/demo-dedup.ts",
+    "m:budget": "tsx src/robust/demo-budget.ts",
+    "m:dependency": "tsx src/robust/demo-dependency.ts",
+    "m:stuck": "tsx src/robust/demo-stuck.ts",
+    "d:normal": "tsx src/robust/demo-loop-normal.ts",
+    "d:maxsteps": "tsx src/robust/demo-loop-maxsteps.ts",
+    "d:noprogress": "tsx src/robust/demo-loop-noprogress.ts",
+    "d:alternating": "tsx src/robust/demo-loop-alternating.ts",
+    "c:token": "tsx src/robust/demo-token.ts",
+    "c:window": "tsx src/robust/demo-window.ts",
+    "c:truncate": "tsx src/robust/demo-truncate.ts",
+    "c:compaction": "tsx src/robust/demo-compaction.ts",
+    "p:breaker": "tsx src/robust/demo-breaker.ts",
+    "p:failover": "tsx src/robust/demo-failover.ts",
+    "p:allfail": "tsx src/robust/demo-allfail.ts",
+    "i:interrupt": "tsx src/robust/demo-interrupt.ts",
+    "i:cleanup": "tsx src/robust/demo-cleanup.ts",
+    "i:resume": "tsx src/robust/demo-resume.ts",
+    "e:env": "tsx src/robust/demo-envcheck.ts",
+    "e:exec": "tsx src/robust/demo-exec.ts",
+    "e:timeout": "tsx src/robust/demo-exec-timeout.ts",
+    "e:fs": "tsx src/robust/demo-fs.ts"
+  },
+  "dependencies": {
+    "openai": "^4.0.0",
+    "dotenv": "^16.4.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}

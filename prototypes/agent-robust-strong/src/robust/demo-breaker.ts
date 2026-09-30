@@ -1,0 +1,31 @@
+import { CircuitBreaker } from './circuit-breaker.js'
+async function main() {
+  console.log('===== 熔断器完整生命周期 =====\n')
+  const breaker = new CircuitBreaker({ failureThreshold: 3, resetTimeoutMs: 2000 })
+  console.log(`【初始】状态：${breaker.getState()}，可请求：${breaker.canRequest()}\n`)
+  console.log('--- 模拟连续失败 ---')
+  for (let i = 1; i <= 3; i++) {
+    breaker.recordFailure()
+    console.log(`第 ${i} 次失败 → 状态：${breaker.getState()}，可请求：${breaker.canRequest()}`)
+  }
+  console.log('（连续 3 次失败，熔断打开，请求被拒绝）\n')
+  console.log('--- 熔断期内尝试 ---')
+  console.log(`立即请求：${breaker.canRequest()}（被拒绝，还在冷却期）\n`)
+  console.log('--- 等待冷却（2 秒）---')
+  await new Promise((r) => setTimeout(r, 2100))
+  console.log(`冷却后请求：${breaker.canRequest()}，状态：${breaker.getState()}`)
+  console.log('（进入半开，放行一个试探请求）\n')
+  console.log('--- 试探成功 ---')
+  breaker.recordSuccess()
+  console.log(`试探成功后状态：${breaker.getState()}（恢复正常 closed）\n`)
+  console.log('--- 再演示：半开时失败会重新熔断 ---')
+  const b2 = new CircuitBreaker({ failureThreshold: 2, resetTimeoutMs: 1000 })
+  b2.recordFailure(); b2.recordFailure()
+  console.log(`连续失败 2 次后：${b2.getState()}`)
+  await new Promise((r) => setTimeout(r, 1100))
+  b2.canRequest()
+  console.log(`冷却后进入：${b2.getState()}`)
+  b2.recordFailure()
+  console.log(`半开时失败后：${b2.getState()}（重新熔断）`)
+}
+main().catch(console.error)
