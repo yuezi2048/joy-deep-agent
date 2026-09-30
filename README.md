@@ -15,7 +15,7 @@
 pnpm install
 cp .env.example .env        # 至少填一个供应商的 Key
 
-pnpm test                   # 177 个单测，全部走假模型，不烧 API
+pnpm test                   # 197 个单测，全部走假模型，不烧 API
 pnpm start                  # 起 Harness：http://localhost:3000
 pnpm run demo               # 或直接进命令行 REPL
 ```
@@ -36,6 +36,7 @@ curl -N "localhost:3000/agent/stream?input=算一下%20(2%2B3)*4"
 | 供应商故障转移（熔断 + 按优先级自动切换，对主循环透明） | `src/providers/failover-model.ts` | **已实现**，含单测 |
 | 幻觉防护（来源约束 + 交付前自我核查，默认关） | `src/robust/citation-guard.ts`、`src/robust/self-check.ts` | **已实现**，含单测 |
 | 工具依赖顺序 + 启动环境预检 | `src/tools/registry.ts`、`src/security/preflight.ts` | **已实现**，含单测 |
+| 评测指标口径与报告格式 | `docs/eval/`、`src/eval/` | **已实现**（口径文档 + 采集器 + 报告渲染）；场景库与执行见 #8 |
 | 死循环治理（步数上限 / 无进展指纹 / 横跳检测 / 墙钟上限） | `src/core/agent-loop.ts` | **已实现**，含单测 |
 | HITL 高风险操作确认 | `src/core/agent-loop.ts` | **已实现**，含单测 |
 | NestJS 服务化 + SSE 流式接口 | `src/nest/`、`src/main.ts` | **已实现**，含单测 |
@@ -56,12 +57,14 @@ joy-deep-agent/
 ├── AGENTS.md            # 给编码 agent 的工作说明
 ├── CONTEXT.md           # 领域词汇表（持续维护）
 ├── docs/adr/            # 架构决策记录（已定 5 条）
+├── docs/eval/           # 评测口径与报告模板
 ├── prototypes/          # 冻结的三份原始 demo，只读
 └── src/
     ├── core/            # AgentLoop、消息类型、错误分类、异步队列
     ├── providers/       # ChatModel 抽象与 OpenAI 兼容实现、供应商配置
     ├── tools/           # 工具注册表、JSON 容错、内置工具（文件/命令/计算）
     ├── robust/          # 8 类故障的中间件实现
+    ├── eval/            # 评测指标采集与报告渲染
     ├── memory/          # Checkpoint / Memory 持久化接口与实现
     ├── security/        # 路径防护
     ├── nest/            # NestJS 模块、控制器、SSE、运行时装配

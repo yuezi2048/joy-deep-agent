@@ -43,3 +43,4 @@ export {
 export * from './memory/index.js';
 export * from './providers/index.js';
 export * from './robust/index.js';
+export * from './eval/index.js';
