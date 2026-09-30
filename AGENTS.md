@@ -24,3 +24,17 @@
 - 命令执行走 `spawn` + `shell:false`；文件操作走受保护的封装（参考原型 `08_terminal`）。
 - MCP server 内日志一律 `console.error`（stdout 归 JSON-RPC 独占）。
 - 提交信息写清「现象 → 原因 → 改法」。
+
+## Agent skills
+
+### Issue tracker
+
+Issue 与 spec 都作为 GitHub Issue 存放在本仓库（用 `gh` CLI 操作）。详见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+沿用五个规范 triage 标签：`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`。详见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+单上下文（single-context）：根目录 `CONTEXT.md` + `docs/adr/`。详见 `docs/agents/domain.md`。
