@@ -2,10 +2,10 @@
 
 一条决策一个文件，命名 `NNNN-短标题.md`，内容包含：背景 / 决策 / 备选方案 / 后果。
 
-## 待定决策
+## 已接受
 
-- [ ] ADR-0001 Harness 的包划分（单包还是 monorepo）
-- [ ] ADR-0002 鲁棒性层如何装配进 AgentLoop
-- [ ] ADR-0003 模型供应商抽象的边界（DeepSeek / OpenAI 切换）
-- [ ] ADR-0004 持久化选型（Memory / Checkpoint 存哪里）
-- [ ] ADR-0005 MCP 与 A2A 的接入层次（工具 vs 子 agent）
+- [ADR-0001](0001-package-layout.md) 包划分用单包 `src/`
+- [ADR-0002](0002-robustness-assembly.md) 鲁棒性层用中间件链装配，不用装饰器包裹
+- [ADR-0003](0003-model-provider-abstraction.md) 模型供应商抽象只做一层 OpenAI 兼容适配器
+- [ADR-0004](0004-persistence.md) 持久化先定接口，默认内存 + JSON 落盘
+- [ADR-0005](0005-mcp-a2a-layer.md) MCP 是工具来源，A2A 是子 agent 传输

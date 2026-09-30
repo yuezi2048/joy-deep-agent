@@ -9,16 +9,40 @@
 - **目标形态**：NestJS Module/Provider 依赖注入分层（编排 / 工具 / 模型 / 持久化），统一服务与 SSE 流式接口，DeepSeek / OpenAI 零改动切换；自研 ReAct AgentLoop、Planner、Memory 与工具注册表，Skill 热插拔、VFS 沙箱、HITL 确认；接入 MCP / A2A，主 Agent 拆解后由子 Agent 并发汇总。
 - **鲁棒性**：失败调用、幻觉、工具误用、死循环、上下文溢出、供应商故障、用户中断、终端环境异常，共 8 类故障的治理层。
 
+## 快速开始
+
+```bash
+pnpm install
+cp .env.example .env        # 至少填一个供应商的 Key
+
+pnpm test                   # 88 个单测，全部走假模型，不烧 API
+pnpm start                  # 起 Harness：http://localhost:3000
+pnpm run demo               # 或直接进命令行 REPL
+```
+
+```bash
+curl localhost:3000/agent/info
+curl -N "localhost:3000/agent/stream?input=算一下%20(2%2B3)*4"
+```
+
 ## 当前状态
 
 | 部分 | 位置 | 状态 |
 | --- | --- | --- |
-| 协议（MCP / A2A / 串联） | `prototypes/agent-protocols/` | 原型已冻结 |
-| 鲁棒性 8 类 | `prototypes/agent-robust-strong/` | 原型已冻结 |
-| 基础 agent（ReAct / Skill / HITL / 沙箱） | `prototypes/deep-agent-demo/` | 原型已冻结 |
-| NestJS 服务化 Harness | 待建 | **未开始** |
-| Planner / Memory | 待建 | **未开始** |
+| AgentLoop（自研 ReAct 循环） | `src/core/agent-loop.ts` | **已实现**，含单测 |
+| 工具注册表与 schema 校验 | `src/tools/registry.ts` | **已实现**，含单测 |
+| 模型供应商抽象（DeepSeek / OpenAI / 通义千问 / Ollama 零改动切换） | `src/providers/` | **已实现**，含单测 |
+| 鲁棒性中间件：失败调用 / 工具误用 / 供应商故障 / 终端异常 | `src/robust/`、`src/tools/builtin/` | **已实现**，含单测 |
+| 死循环治理（步数上限 + 无进展指纹） | `src/core/agent-loop.ts` | **已实现**，含单测 |
+| HITL 高风险操作确认 | `src/core/agent-loop.ts` | **已实现**，含单测 |
+| NestJS 服务化 + SSE 流式接口 | `src/nest/`、`src/main.ts` | **已实现**，含单测 |
+| 上下文溢出治理（token 估算 / 滑动窗口 / 摘要压缩） | 待迁 | 未开始 |
+| 用户中断（Checkpoint / Resume） | 待迁 | 未开始 |
+| Skill 热插拔、VFS 沙箱 | 待迁（原型 `deep-agent-demo`） | 未开始 |
+| MCP / A2A 接入 | 待迁（原型 `agent-protocols`） | 未开始 |
+| Planner / Memory | 待建 | 未开始 |
 | 故障注入评测（量化收益） | 待建 | **未开始** |
+| 协议 / 鲁棒性 / 基础 agent 原型 | `prototypes/` | 已冻结，只读 |
 
 `prototypes/` 是**只读的原始材料**（primary source）：保留现场，新实现从零写，不就地修改原型。
 
@@ -28,9 +52,16 @@
 joy-deep-agent/
 ├── AGENTS.md            # 给编码 agent 的工作说明
 ├── CONTEXT.md           # 领域词汇表（持续维护）
-├── docs/adr/            # 架构决策记录
-├── prototypes/          # 冻结的三份原始 demo
-└── (待建) src/ 或 packages/
+├── docs/adr/            # 架构决策记录（已定 5 条）
+├── prototypes/          # 冻结的三份原始 demo，只读
+└── src/
+    ├── core/            # AgentLoop、消息类型、错误分类、异步队列
+    ├── providers/       # ChatModel 抽象与 OpenAI 兼容实现、供应商配置
+    ├── tools/           # 工具注册表、JSON 容错、内置工具（文件/命令/计算）
+    ├── robust/          # 8 类故障的中间件实现
+    ├── security/        # 路径防护
+    ├── nest/            # NestJS 模块、控制器、SSE、运行时装配
+    └── cli.ts / main.ts # 两个入口：命令行 REPL 与 HTTP 服务
 ```
 
 ## 环境
