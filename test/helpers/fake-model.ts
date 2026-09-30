@@ -74,3 +74,42 @@ export function multiToolTurn(
     finishReason: 'tool_calls',
   };
 }
+
+/** 可编程的假模型：行为随时可换，顺便数调用次数。用于「按需失败 / 卡住」这类场景。 */
+export class StubChatModel implements ChatModel {
+  readonly supportsTools = true;
+  readonly model = 'stub-1';
+  calls = 0;
+  behavior: (request: ChatRequest) => Promise<ChatResponse>;
+  streamBehavior?: (request: ChatRequest) => AsyncIterable<StreamChunk>;
+
+  constructor(
+    readonly name: string,
+    behavior: (request: ChatRequest) => Promise<ChatResponse>,
+    streamBehavior?: (request: ChatRequest) => AsyncIterable<StreamChunk>,
+  ) {
+    this.behavior = behavior;
+    this.streamBehavior = streamBehavior;
+  }
+
+  async chat(request: ChatRequest): Promise<ChatResponse> {
+    this.calls++;
+    return this.behavior(request);
+  }
+
+  chatStream(request: ChatRequest): AsyncIterable<StreamChunk> {
+    this.calls++;
+    return this.streamBehavior ? this.streamBehavior(request) : toStream(this.behavior(request));
+  }
+}
+
+export async function* toStream(response: Promise<ChatResponse>): AsyncIterable<StreamChunk> {
+  const value = await response;
+  if (value.content) yield { type: 'text', delta: value.content };
+  yield {
+    type: 'done',
+    finishReason: value.finishReason,
+    toolCalls: value.toolCalls,
+    usage: value.usage,
+  };
+}

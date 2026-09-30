@@ -7,6 +7,7 @@
 - **Harness** —— 承载 agent 主循环的服务外壳，分编排 / 工具 / 模型 / 持久化四层。
 - **AgentLoop** —— 自研 ReAct 循环：模型思考 → 工具调用 → 观察 → 再思考，直到命中终止条件。
 - **Planner** —— 任务拆解：把请求拆成可独立推进的子任务。
+- **原地打转 / 横跳** —— 两种死循环形态：前者每步调用签名完全相同（no_progress），后者按周期重复、典型是 A/B/A/B（loop_detected）。连同步数用尽（max_steps）与墙钟超限（timeout），四种停止原因在 `AgentRunResult.stopReason` 里可区分。
 - **Memory** —— 跨步 / 跨会话状态存储（短期上下文 + 长期记忆）。
 - **ToolRegistry** —— 工具注册表：注册、发现、按 schema 校验后调用。
 - **ToolMiddleware** —— 工具调用链上的鲁棒性中间件，形如 `(next) => (call) => Promise<Result>`；8 类故障各对应一条中间件。

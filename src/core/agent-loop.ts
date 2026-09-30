@@ -5,13 +5,21 @@ import { AsyncQueue } from './async-queue.js';
 import { deterministicToolCallId } from './stable-key.js';
 import type { ChatMessage, ToolCall, ToolDefinition, ToolResult, Usage } from './types.js';
 
-export type StopReason = 'completed' | 'max_steps' | 'no_progress' | 'cancelled';
+export type StopReason =
+  | 'completed'
+  | 'max_steps'
+  | 'no_progress'
+  | 'loop_detected'
+  | 'timeout'
+  | 'cancelled';
 
 export interface AgentRunResult {
   /** 最后一条 assistant 文本 */
   content: string;
   steps: number;
   stopReason: StopReason;
+  /** 停下来的具体理由（横跳周期、超时耗时等），排查时不用再猜 */
+  stopDetail?: string;
   /** 完整对话轨迹，含工具结果，可直接续跑 */
   messages: readonly ChatMessage[];
   toolCalls: readonly ToolCall[];
@@ -57,6 +65,13 @@ export interface AgentLoopOptions {
   maxTokens?: number;
   /** 连续若干步的工具调用签名完全一致，判定为原地打转 */
   noProgressLimit?: number;
+  /** 横跳检测：末尾出现「周期 2..maxCyclePeriod 的序列重复 cycleRepeats 次」即判定为绕圈 */
+  maxCyclePeriod?: number;
+  cycleRepeats?: number;
+  /** 单次任务的墙钟上限（毫秒），0 表示不限。到点会掐断在飞的模型 / 工具调用 */
+  maxDurationMs?: number;
+  /** 时间源，测试可注入假时钟 */
+  now?: () => number;
   /**
    * HITL 确认钩子。`requiresConfirmation` 的工具会先走这里；
    * 未提供钩子时默认拒绝——宁可拒绝，也不默认放行高风险操作。
@@ -81,14 +96,17 @@ const DEFAULTS = {
   temperature: 0.3,
   maxTokens: 4096,
   noProgressLimit: 3,
+  maxCyclePeriod: 3,
+  cycleRepeats: 2,
+  maxDurationMs: 300_000,
 } as const;
 
 /**
  * 自研 ReAct 循环：模型思考 → 工具调用 → 观察回灌 → 再思考，直到不再请求工具或命中终止条件。
  *
  * 本类只做编排，不掺防护逻辑：重试、熔断、预算、去重都在 ToolRegistry 的中间件链上（见 ADR-0002）。
- * 终止条件四选一：模型不再请求工具（completed）、步数用尽（max_steps）、
- * 原地打转（no_progress）、外部取消（cancelled）。
+ * 终止条件：模型不再请求工具（completed）、步数用尽（max_steps）、原地打转（no_progress）、
+ * 两个工具之间来回横跳（loop_detected）、墙钟超限（timeout）、外部取消（cancelled）。
  *
  * 传入 `options.checkpoint` 后具备中断续跑能力：`run()` 冷启动，`resume()` 从检查点接着走。
  */
@@ -99,11 +117,18 @@ export class AgentLoop {
   private readonly temperature: number;
   private readonly maxTokens: number;
   private readonly noProgressLimit: number;
+  private readonly maxCyclePeriod: number;
+  private readonly cycleRepeats: number;
+  private readonly maxDurationMs: number;
+  private readonly now: () => number;
   private readonly systemPrompt: string;
   private readonly confirm?: AgentLoopOptions['confirm'];
   private readonly signal?: AbortSignal;
   private readonly checkpoint?: CheckpointOptions;
   private readonly messages: ChatMessage[] = [];
+  /** 本次执行的有效信号：调用方信号 + 墙钟到点后的内部掐断。工具与模型都看它。 */
+  private runSignal?: AbortSignal;
+  private timedOut = false;
 
   constructor(deps: AgentLoopDeps) {
     this.model = deps.model;
@@ -113,6 +138,10 @@ export class AgentLoop {
     this.temperature = deps.options?.temperature ?? DEFAULTS.temperature;
     this.maxTokens = deps.options?.maxTokens ?? DEFAULTS.maxTokens;
     this.noProgressLimit = deps.options?.noProgressLimit ?? DEFAULTS.noProgressLimit;
+    this.maxCyclePeriod = deps.options?.maxCyclePeriod ?? DEFAULTS.maxCyclePeriod;
+    this.cycleRepeats = deps.options?.cycleRepeats ?? DEFAULTS.cycleRepeats;
+    this.maxDurationMs = deps.options?.maxDurationMs ?? DEFAULTS.maxDurationMs;
+    this.now = deps.options?.now ?? Date.now;
     this.confirm = deps.options?.confirm;
     this.signal = deps.options?.signal;
     this.checkpoint = deps.options?.checkpoint;
@@ -208,7 +237,39 @@ export class AgentLoop {
     return result;
   }
 
+  /**
+   * 执行的外壳：装上墙钟上限（到点掐断在飞的模型 / 工具调用），跑完再把信号卸掉。
+   * 计时从本次 drive 开始算——续跑是新的一次执行，重新计时。
+   */
   private async drive(
+    input: string,
+    restored: AgentCheckpointState | null,
+    emit: ((event: AgentEvent) => void) | null,
+  ): Promise<AgentRunResult> {
+    const deadlineSignal = new AbortController();
+    this.timedOut = false;
+    const timer =
+      this.maxDurationMs > 0
+        ? setTimeout(() => {
+            this.timedOut = true;
+            deadlineSignal.abort();
+          }, this.maxDurationMs)
+        : null;
+    timer?.unref?.();
+
+    this.runSignal = this.signal
+      ? AbortSignal.any([this.signal, deadlineSignal.signal])
+      : deadlineSignal.signal;
+
+    try {
+      return await this.driveInternal(input, restored, emit);
+    } finally {
+      if (timer) clearTimeout(timer);
+      this.runSignal = undefined;
+    }
+  }
+
+  private async driveInternal(
     input: string,
     restored: AgentCheckpointState | null,
     emit: ((event: AgentEvent) => void) | null,
@@ -240,13 +301,25 @@ export class AgentLoop {
     // 上一次可能停在一组工具执行到一半：先把缺结果的调用补上，轨迹才合法
     if (restored) await this.completePendingGroup(state, emit);
 
+    const deadline =
+      this.maxDurationMs > 0 ? this.now() + this.maxDurationMs : Number.POSITIVE_INFINITY;
+
     for (let step = state.steps; step < this.maxSteps; step++) {
       const current = step + 1;
       emit?.({ type: 'step_start', step: current });
 
       if (this.signal?.aborted) return this.finish(state, 'cancelled');
+      if (this.timedOut || this.now() >= deadline) return this.finishTimeout(state);
 
-      const turn = emit ? await this.turnStreaming(emit) : await this.turnPlain();
+      let turn: TurnOutcome;
+      try {
+        turn = emit ? await this.turnStreaming(emit) : await this.turnPlain();
+      } catch (error) {
+        // 到点掐断的调用按「超时」处理，其余错误照旧上抛
+        if (this.timedOut) return this.finishTimeout(state);
+        throw error;
+      }
+      if (this.timedOut) return this.finishTimeout(state);
       accumulateUsage(state.usage, turn.usage);
       state.lastContent = turn.content;
 
@@ -264,17 +337,28 @@ export class AgentLoop {
       state.executed.push(...toolCalls);
       state.fingerprints.push(fingerprint(toolCalls));
       const stuck = isStuck(state.fingerprints, this.noProgressLimit);
+      const cycle = detectCycle(state.fingerprints, this.maxCyclePeriod, this.cycleRepeats);
 
       // 即使判定卡死也把这一轮工具跑完：轨迹里缺 tool 结果会让后续请求结构非法
       for (const call of toolCalls) {
-        if (this.signal?.aborted) break;
+        if (this.signal?.aborted || this.timedOut) break;
         await this.executeCall(call, emit);
         await this.persist(state);
       }
 
       // 组没跑完就取消：不留半截轨迹在内存里作数，交给 resume() 接着补
       if (this.signal?.aborted) return this.finish(state, 'cancelled');
-      if (stuck) return this.finish(state, 'no_progress');
+      if (this.timedOut) return this.finishTimeout(state);
+      if (stuck) {
+        return this.finish(state, 'no_progress', `连续 ${this.noProgressLimit} 步调用签名完全相同`);
+      }
+      if (cycle > 0) {
+        return this.finish(
+          state,
+          'loop_detected',
+          `调用序列以周期 ${cycle} 重复了 ${this.cycleRepeats} 次`,
+        );
+      }
     }
 
     return this.finish(state, 'max_steps');
@@ -343,7 +427,7 @@ export class AgentLoop {
         isError: true,
       };
     } else {
-      result = await this.tools.execute(call, this.signal);
+      result = await this.tools.execute(call, this.runSignal);
     }
 
     this.messages.push({
@@ -372,7 +456,7 @@ export class AgentLoop {
     };
     const schemas = this.tools.schemas();
     if (schemas.length > 0) request.tools = schemas;
-    if (this.signal) request.signal = this.signal;
+    if (this.runSignal) request.signal = this.runSignal;
     return request;
   }
 
@@ -399,8 +483,16 @@ export class AgentLoop {
     return checkpoint?.state ?? null;
   }
 
+  private finishTimeout(state: RunState): Promise<AgentRunResult> {
+    return this.finish(state, 'timeout', `超过墙钟上限 ${this.maxDurationMs}ms`);
+  }
+
   /** 正常跑完就清掉进度点；其余终止原因保留，供人或程序决定要不要续跑。 */
-  private async finish(state: RunState, stopReason: StopReason): Promise<AgentRunResult> {
+  private async finish(
+    state: RunState,
+    stopReason: StopReason,
+    stopDetail?: string,
+  ): Promise<AgentRunResult> {
     if (stopReason === 'completed') {
       await this.clearCheckpoint();
     } else {
@@ -410,6 +502,7 @@ export class AgentLoop {
       content: state.lastContent,
       steps: state.steps,
       stopReason,
+      ...(stopDetail ? { stopDetail } : {}),
       messages: [...this.messages],
       toolCalls: [...state.executed],
       usage: { ...state.usage },
@@ -439,4 +532,30 @@ function isStuck(fingerprints: readonly string[], limit: number): boolean {
   const recent = fingerprints.slice(-limit);
   const first = recent[0];
   return first !== undefined && recent.every((item) => item === first);
+}
+
+/**
+ * 横跳检测：末尾是否出现了「同一段序列连着重复」。
+ *
+ * 与 `isStuck` 的分工：`isStuck` 管周期 1（每步调用完全一样）；
+ * 这里管周期 2..maxPeriod，典型的是 A/B/A/B 在两个工具之间来回绕。
+ * 返回检出的周期（0 表示没检出）。
+ */
+function detectCycle(fingerprints: readonly string[], maxPeriod: number, repeats: number): number {
+  if (maxPeriod < 2 || repeats < 2) return 0;
+
+  for (let period = 2; period <= maxPeriod; period++) {
+    const size = period * repeats;
+    if (fingerprints.length < size) continue;
+    const tail = fingerprints.slice(-size);
+    let repeated = true;
+    for (let index = 0; index + period < size; index++) {
+      if (tail[index] !== tail[index + period]) {
+        repeated = false;
+        break;
+      }
+    }
+    if (repeated) return period;
+  }
+  return 0;
 }

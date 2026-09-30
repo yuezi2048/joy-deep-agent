@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { AgentLoop } from '../src/core/agent-loop.js';
 import { CancelledError, RetryableError } from '../src/core/errors.js';
-import type { ChatModel, ChatRequest, ChatResponse, StreamChunk } from '../src/providers/chat-model.js';
+import type { ChatModel } from '../src/providers/chat-model.js';
 import {
   AllProvidersFailedError,
   FailoverChatModel,
@@ -11,54 +11,15 @@ import {
 } from '../src/providers/failover-model.js';
 import { createFailoverModel, type ProviderConfig } from '../src/providers/index.js';
 import { ToolRegistry } from '../src/tools/registry.js';
-import { answerTurn, toolTurn } from './helpers/fake-model.js';
-
-/** 可编程的假供应商：行为随时可换，顺便数调用次数。 */
-class StubModel implements ChatModel {
-  readonly supportsTools = true;
-  readonly model = 'stub-1';
-  calls = 0;
-  behavior: (request: ChatRequest) => Promise<ChatResponse>;
-  streamBehavior?: (request: ChatRequest) => AsyncIterable<StreamChunk>;
-
-  constructor(
-    readonly name: string,
-    behavior: (request: ChatRequest) => Promise<ChatResponse>,
-    streamBehavior?: (request: ChatRequest) => AsyncIterable<StreamChunk>,
-  ) {
-    this.behavior = behavior;
-    this.streamBehavior = streamBehavior;
-  }
-
-  async chat(request: ChatRequest): Promise<ChatResponse> {
-    this.calls++;
-    return this.behavior(request);
-  }
-
-  chatStream(request: ChatRequest): AsyncIterable<StreamChunk> {
-    this.calls++;
-    return this.streamBehavior ? this.streamBehavior(request) : toStream(this.behavior(request));
-  }
-}
-
-async function* toStream(response: Promise<ChatResponse>): AsyncIterable<StreamChunk> {
-  const value = await response;
-  if (value.content) yield { type: 'text', delta: value.content };
-  yield {
-    type: 'done',
-    finishReason: value.finishReason,
-    toolCalls: value.toolCalls,
-    usage: value.usage,
-  };
-}
+import { StubChatModel, answerTurn, toolTurn } from './helpers/fake-model.js';
 
 const failing = (name: string, error: Error = new RetryableError('429 限流')) =>
-  new StubModel(name, async () => {
+  new StubChatModel(name, async () => {
     throw error;
   });
 
 const answering = (name: string, content: string) =>
-  new StubModel(name, async () => answerTurn(content));
+  new StubChatModel(name, async () => answerTurn(content));
 
 const member = (key: string, label: string, model: ChatModel) => ({ key, label, model });
 
@@ -180,7 +141,7 @@ describe('FailoverChatModel · 流式', () => {
   });
 
   it('已经吐出增量后失败：不换供应商重来（否则用户会看到两遍）', async () => {
-    const primary = new StubModel(
+    const primary = new StubChatModel(
       'a',
       async () => answerTurn('不该走这里'),
       async function* () {
@@ -233,7 +194,7 @@ describe('故障转移 · 对上层透明', () => {
   it('AgentLoop 零改动：换上故障转移模型后照常跑完一次工具调用', async () => {
     const script = [toolTurn('add', { a: 2, b: 3 }), answerTurn('答案是 5')];
     const primary = failing('a');
-    const backup = new StubModel('b', async () => script.shift() ?? answerTurn('剧本没了'));
+    const backup = new StubChatModel('b', async () => script.shift() ?? answerTurn('剧本没了'));
     const tools = new ToolRegistry().register({
       name: 'add',
       description: '加法',
