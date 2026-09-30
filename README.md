@@ -15,8 +15,9 @@
 pnpm install
 cp .env.example .env        # 至少填一个供应商的 Key
 
-pnpm test                   # 233 个单测，全部走假模型，不烧 API
+pnpm test                   # 243 个单测，全部走假模型，不烧 API
 pnpm eval                   # 跑故障注入评测，输出 docs/eval/report-<日期>.md
+pnpm verify                 # 单测 + 评测门禁（CI 跑的就是这一条）
 pnpm start                  # 起 Harness：http://localhost:3000
 pnpm run demo               # 或直接进命令行 REPL
 ```
@@ -68,6 +69,9 @@ curl -N "localhost:3000/agent/stream?input=算一下%20(2%2B3)*4"
 加固不是免费的：完成率与恢复率的提升，对应 token 均值翻了一倍多（自我核查与重试/转移的重发都算在加固账上）。
 恢复时间按生产退避策略实测、不调参：S-01 限流重试 P50 = 501ms / 2 次尝试，S-06 供应商转移 P50 = 0ms / 2 次尝试。
 口径见 `docs/eval/metrics.md`，逐场景数据见 `docs/eval/report-2026-09-30.md`。
+
+CI 里跑 `pnpm verify`（单测 + `pnpm eval:gate`）：**加固侧不许比基线差**，总体完成率不得低于达标线
+（默认 100%，依据是 2026-09-30 实测 45/45 逐类全过）；退化时非零退出并列出是哪一类退了、差多少 pp。
 
 ## 目录
 

@@ -14,6 +14,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "eval": "tsx src/eval/run.ts",
+    "eval:gate": "tsx src/eval/gate.ts",
+    "verify": "pnpm test && pnpm eval:gate",
     "demo": "tsx src/cli.ts",
     "start": "tsx src/main.ts",
     "start:dev": "tsx watch src/main.ts"
