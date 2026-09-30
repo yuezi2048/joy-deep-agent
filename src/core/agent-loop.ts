@@ -1,6 +1,8 @@
+import type { CheckpointStore } from '../memory/checkpoint-store.js';
 import type { ChatModel, ChatRequest } from '../providers/chat-model.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import { AsyncQueue } from './async-queue.js';
+import { deterministicToolCallId } from './stable-key.js';
 import type { ChatMessage, ToolCall, ToolDefinition, ToolResult, Usage } from './types.js';
 
 export type StopReason = 'completed' | 'max_steps' | 'no_progress' | 'cancelled';
@@ -23,6 +25,31 @@ export type AgentEvent =
   | { type: 'tool_result'; call: ToolCall; result: ToolResult }
   | { type: 'done'; result: AgentRunResult };
 
+/** 检查点配置：`store` 决定存哪儿，`id` 标识任务——只有同一个 id 才能续跑。 */
+export interface CheckpointOptions {
+  store: CheckpointStore;
+  id: string;
+}
+
+/**
+ * 中断时落盘的进度快照。
+ * `messages` 里既有 assistant 声明过的调用，也有已拿到的工具结果，
+ * 因此「已经做了什么、拿到哪些结果」都能还原；`executed` 用于如实报告本轮的调用清单。
+ */
+export interface AgentCheckpointState {
+  input: string;
+  messages: ChatMessage[];
+  /** 已完成的步数；续跑从下一步接着走 */
+  steps: number;
+  lastContent: string;
+  fingerprints: string[];
+  usage: Usage;
+  executed: ToolCall[];
+}
+
+/** 单次执行的可变状态（不含消息，消息存在实例的 `messages` 上）。 */
+type RunState = Omit<AgentCheckpointState, 'messages'>;
+
 export interface AgentLoopOptions {
   systemPrompt?: string;
   maxSteps?: number;
@@ -36,6 +63,8 @@ export interface AgentLoopOptions {
    */
   confirm?: (call: ToolCall, definition: ToolDefinition) => Promise<boolean>;
   signal?: AbortSignal;
+  /** 提供后每个步边界与每次工具调用都会落盘，支持中断续跑（见 ADR-0004） */
+  checkpoint?: CheckpointOptions;
 }
 
 export interface AgentLoopDeps {
@@ -60,6 +89,8 @@ const DEFAULTS = {
  * 本类只做编排，不掺防护逻辑：重试、熔断、预算、去重都在 ToolRegistry 的中间件链上（见 ADR-0002）。
  * 终止条件四选一：模型不再请求工具（completed）、步数用尽（max_steps）、
  * 原地打转（no_progress）、外部取消（cancelled）。
+ *
+ * 传入 `options.checkpoint` 后具备中断续跑能力：`run()` 冷启动，`resume()` 从检查点接着走。
  */
 export class AgentLoop {
   private readonly model: ChatModel;
@@ -71,6 +102,7 @@ export class AgentLoop {
   private readonly systemPrompt: string;
   private readonly confirm?: AgentLoopOptions['confirm'];
   private readonly signal?: AbortSignal;
+  private readonly checkpoint?: CheckpointOptions;
   private readonly messages: ChatMessage[] = [];
 
   constructor(deps: AgentLoopDeps) {
@@ -83,6 +115,7 @@ export class AgentLoop {
     this.noProgressLimit = deps.options?.noProgressLimit ?? DEFAULTS.noProgressLimit;
     this.confirm = deps.options?.confirm;
     this.signal = deps.options?.signal;
+    this.checkpoint = deps.options?.checkpoint;
   }
 
   get history(): readonly ChatMessage[] {
@@ -93,19 +126,66 @@ export class AgentLoop {
     this.messages.length = 0;
   }
 
-  /** 一次性执行（非流式）。 */
+  /** 一次性执行（非流式）。冷启动：同一个 id 上的旧进度会被丢弃。 */
   async run(input: string): Promise<AgentRunResult> {
-    return this.drive(input, null);
+    await this.clearCheckpoint();
+    return this.drive(input, null, null);
+  }
+
+  /**
+   * 从检查点续跑（非流式）。
+   * 没有检查点时按冷启动处理，此时必须提供 `input`，否则报错——不会静默什么都不做。
+   */
+  async resume(input?: string): Promise<AgentRunResult> {
+    const restored = await this.loadCheckpoint();
+    return this.drive(...this.startFrom(restored, input), null);
   }
 
   /**
    * 流式执行：文本增量实时吐出，工具调用与结果以事件形式给出。
    * 依次 yield 的 `done` 事件携带与 `run()` 完全一致的最终结果。
    */
-  async *runStream(input: string): AsyncGenerator<AgentEvent, AgentRunResult> {
+  runStream(input: string): AsyncGenerator<AgentEvent, AgentRunResult> {
+    return this.streamFrom(async (emit) => {
+      await this.clearCheckpoint();
+      return this.drive(input, null, emit);
+    });
+  }
+
+  /** 流式续跑，语义同 `resume()`。 */
+  resumeStream(input?: string): AsyncGenerator<AgentEvent, AgentRunResult> {
+    return this.streamFrom(async (emit) => {
+      const restored = await this.loadCheckpoint();
+      const [resumeInput, state] = this.startFrom(restored, input);
+      return this.drive(resumeInput, state, emit);
+    });
+  }
+
+  /** 丢弃当前 id 上的检查点（`run()` 冷启动时也会调）。 */
+  async clearCheckpoint(): Promise<void> {
+    if (!this.checkpoint) return;
+    await this.checkpoint.store.delete(this.checkpoint.id);
+  }
+
+  private startFrom(
+    restored: AgentCheckpointState | null,
+    input: string | undefined,
+  ): [string, AgentCheckpointState | null] {
+    if (restored) return [input ?? restored.input, restored];
+    if (input === undefined) {
+      throw new Error(
+        `没有 id 为 "${this.checkpoint?.id ?? '(未配置)'}" 的检查点，也没有提供 input：无法启动任务`,
+      );
+    }
+    return [input, null];
+  }
+
+  private async *streamFrom(
+    start: (emit: (event: AgentEvent) => void) => Promise<AgentRunResult>,
+  ): AsyncGenerator<AgentEvent, AgentRunResult> {
     const queue = new AsyncQueue<AgentEvent>();
     let result: AgentRunResult | null = null;
-    const task = this.drive(input, (event) => queue.push(event)).then(
+    const task = start((event) => queue.push(event)).then(
       (value) => {
         result = value;
         queue.close();
@@ -130,47 +210,98 @@ export class AgentLoop {
 
   private async drive(
     input: string,
+    restored: AgentCheckpointState | null,
     emit: ((event: AgentEvent) => void) | null,
   ): Promise<AgentRunResult> {
     this.tools.resetState();
-    this.messages.push({ role: 'user', content: input });
 
-    const usage: Usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-    const executed: ToolCall[] = [];
-    const fingerprints: string[] = [];
-    let lastContent = '';
-    let steps = 0;
+    const state: RunState = {
+      input,
+      steps: 0,
+      lastContent: '',
+      fingerprints: [],
+      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      executed: [],
+    };
 
-    for (let step = 0; step < this.maxSteps; step++) {
-      steps = step + 1;
-      if (emit) emit({ type: 'step_start', step: steps });
-
-      if (this.signal?.aborted) {
-        return this.finish(lastContent, steps, 'cancelled', executed, usage);
-      }
-
-      const turn = emit ? await this.turnStreaming(emit) : await this.turnPlain();
-      accumulateUsage(usage, turn.usage);
-      lastContent = turn.content;
-      this.messages.push({ role: 'assistant', content: turn.content, toolCalls: turn.toolCalls });
-
-      if (turn.toolCalls.length === 0) {
-        return this.finish(lastContent, steps, 'completed', executed, usage);
-      }
-
-      executed.push(...turn.toolCalls);
-      fingerprints.push(fingerprint(turn.toolCalls));
-      const stuck = isStuck(fingerprints, this.noProgressLimit);
-
-      // 即使判定卡死也把这一轮工具跑完：轨迹里缺 tool 结果会让后续请求结构非法
-      for (const call of turn.toolCalls) {
-        await this.executeCall(call, emit);
-      }
-
-      if (stuck) return this.finish(lastContent, steps, 'no_progress', executed, usage);
+    if (restored) {
+      this.messages.length = 0;
+      this.messages.push(...restored.messages);
+      state.steps = restored.steps;
+      state.lastContent = restored.lastContent;
+      state.fingerprints.push(...restored.fingerprints);
+      Object.assign(state.usage, restored.usage);
+      state.executed.push(...restored.executed);
+    } else {
+      this.messages.push({ role: 'user', content: input });
     }
 
-    return this.finish(lastContent, steps, 'max_steps', executed, usage);
+    await this.persist(state);
+    // 上一次可能停在一组工具执行到一半：先把缺结果的调用补上，轨迹才合法
+    if (restored) await this.completePendingGroup(state, emit);
+
+    for (let step = state.steps; step < this.maxSteps; step++) {
+      const current = step + 1;
+      emit?.({ type: 'step_start', step: current });
+
+      if (this.signal?.aborted) return this.finish(state, 'cancelled');
+
+      const turn = emit ? await this.turnStreaming(emit) : await this.turnPlain();
+      accumulateUsage(state.usage, turn.usage);
+      state.lastContent = turn.content;
+
+      // id 用确定性推导，模型给的随机 id 一旦跨进程重启就没法用来判定「这一步跑过没有」
+      const toolCalls = turn.toolCalls.map((call, index) => ({
+        ...call,
+        id: deterministicToolCallId(current, index, call.name, call.arguments),
+      }));
+      this.messages.push({ role: 'assistant', content: turn.content, toolCalls });
+      state.steps = current;
+      await this.persist(state);
+
+      if (toolCalls.length === 0) return this.finish(state, 'completed');
+
+      state.executed.push(...toolCalls);
+      state.fingerprints.push(fingerprint(toolCalls));
+      const stuck = isStuck(state.fingerprints, this.noProgressLimit);
+
+      // 即使判定卡死也把这一轮工具跑完：轨迹里缺 tool 结果会让后续请求结构非法
+      for (const call of toolCalls) {
+        if (this.signal?.aborted) break;
+        await this.executeCall(call, emit);
+        await this.persist(state);
+      }
+
+      // 组没跑完就取消：不留半截轨迹在内存里作数，交给 resume() 接着补
+      if (this.signal?.aborted) return this.finish(state, 'cancelled');
+      if (stuck) return this.finish(state, 'no_progress');
+    }
+
+    return this.finish(state, 'max_steps');
+  }
+
+  /**
+   * 补齐「assistant 已声明、但没有对应 tool 结果」的调用。
+   * 只补缺的那些：已经有结果的调用（上一次真跑过、有副作用）绝不重跑。
+   */
+  private async completePendingGroup(
+    state: RunState,
+    emit: ((event: AgentEvent) => void) | null,
+  ): Promise<void> {
+    const lastAssistant = [...this.messages]
+      .reverse()
+      .find((message) => message.role === 'assistant' && (message.toolCalls?.length ?? 0) > 0);
+    const calls = lastAssistant?.toolCalls;
+    if (!calls || calls.length === 0) return;
+
+    const answered = new Set(
+      this.messages.filter((message) => message.role === 'tool').map((message) => message.toolCallId),
+    );
+    for (const call of calls) {
+      if (answered.has(call.id)) continue;
+      await this.executeCall(call, emit);
+      await this.persist(state);
+    }
   }
 
   private async turnPlain(): Promise<TurnOutcome> {
@@ -245,20 +376,43 @@ export class AgentLoop {
     return request;
   }
 
-  private finish(
-    content: string,
-    steps: number,
-    stopReason: StopReason,
-    toolCalls: ToolCall[],
-    usage: Usage,
-  ): AgentRunResult {
+  /** 写检查点。没有配置存储时是空操作，所以调用点不需要到处判空。 */
+  private async persist(state: RunState): Promise<void> {
+    if (!this.checkpoint) return;
+    const snapshot: AgentCheckpointState = {
+      input: state.input,
+      messages: [...this.messages],
+      steps: state.steps,
+      lastContent: state.lastContent,
+      fingerprints: [...state.fingerprints],
+      usage: { ...state.usage },
+      executed: [...state.executed],
+    };
+    await this.checkpoint.store.save(this.checkpoint.id, snapshot);
+  }
+
+  private async loadCheckpoint(): Promise<AgentCheckpointState | null> {
+    if (!this.checkpoint) {
+      throw new Error('未配置检查点存储：构造 AgentLoop 时传 options.checkpoint 才能续跑');
+    }
+    const checkpoint = await this.checkpoint.store.load<AgentCheckpointState>(this.checkpoint.id);
+    return checkpoint?.state ?? null;
+  }
+
+  /** 正常跑完就清掉进度点；其余终止原因保留，供人或程序决定要不要续跑。 */
+  private async finish(state: RunState, stopReason: StopReason): Promise<AgentRunResult> {
+    if (stopReason === 'completed') {
+      await this.clearCheckpoint();
+    } else {
+      await this.persist(state);
+    }
     return {
-      content,
-      steps,
+      content: state.lastContent,
+      steps: state.steps,
       stopReason,
       messages: [...this.messages],
-      toolCalls: [...toolCalls],
-      usage,
+      toolCalls: [...state.executed],
+      usage: { ...state.usage },
     };
   }
 }

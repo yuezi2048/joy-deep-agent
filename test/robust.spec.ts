@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { NonRetryableError, RetryableError, TimeoutError, isRetryable } from '../src/core/errors.js';
 import type { ToolCall, ToolHandler, ToolMiddleware, ToolResult } from '../src/core/types.js';
+import { stableStringify } from '../src/core/stable-key.js';
 import {
   CircuitBreaker,
   budgetMiddleware,
-  canonicalize,
   circuitBreakerMiddleware,
   dedupeMiddleware,
   withRetry,
@@ -181,8 +181,9 @@ describe('dedupeMiddleware（工具误用 · 去重）', () => {
     expect(result.content).toBe('成功');
   });
 
-  it('canonicalize 与键顺序无关', () => {
-    expect(canonicalize({ a: 1, b: 2 })).toBe(canonicalize({ b: 2, a: 1 }));
+  it('去重 key 与参数键顺序无关（复用 stableStringify，单一实现）', () => {
+    expect(stableStringify({ a: 1, b: 2 })).toBe(stableStringify({ b: 2, a: 1 }));
+    expect(stableStringify({ a: 1 })).not.toBe(stableStringify({ a: 2 }));
   });
 
   it('reset 清空缓存', async () => {

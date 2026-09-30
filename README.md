@@ -15,7 +15,7 @@
 pnpm install
 cp .env.example .env        # 至少填一个供应商的 Key
 
-pnpm test                   # 107 个单测，全部走假模型，不烧 API
+pnpm test                   # 120 个单测，全部走假模型，不烧 API
 pnpm start                  # 起 Harness：http://localhost:3000
 pnpm run demo               # 或直接进命令行 REPL
 ```
@@ -37,7 +37,7 @@ curl -N "localhost:3000/agent/stream?input=算一下%20(2%2B3)*4"
 | HITL 高风险操作确认 | `src/core/agent-loop.ts` | **已实现**，含单测 |
 | NestJS 服务化 + SSE 流式接口 | `src/nest/`、`src/main.ts` | **已实现**，含单测 |
 | 上下文溢出治理（token 估算 / 滑动窗口 / 摘要压缩） | `src/robust/context-manager.ts` | **已实现**，含单测 |
-| 用户中断（Checkpoint / Resume） | 待迁 | 未开始 |
+| 用户中断（Checkpoint / Resume） | `src/memory/`、`src/core/agent-loop.ts` | **已实现**，含单测（取消落盘、续跑不重复副作用、原子写） |
 | Skill 热插拔、VFS 沙箱 | 待迁（原型 `deep-agent-demo`） | 未开始 |
 | MCP / A2A 接入 | 待迁（原型 `agent-protocols`） | 未开始 |
 | Planner / Memory | 待建 | 未开始 |
@@ -59,6 +59,7 @@ joy-deep-agent/
     ├── providers/       # ChatModel 抽象与 OpenAI 兼容实现、供应商配置
     ├── tools/           # 工具注册表、JSON 容错、内置工具（文件/命令/计算）
     ├── robust/          # 8 类故障的中间件实现
+    ├── memory/          # Checkpoint / Memory 持久化接口与实现
     ├── security/        # 路径防护
     ├── nest/            # NestJS 模块、控制器、SSE、运行时装配
     └── cli.ts / main.ts # 两个入口：命令行 REPL 与 HTTP 服务

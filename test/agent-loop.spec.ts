@@ -32,7 +32,7 @@ describe('AgentLoop（自研 ReAct 循环）', () => {
     expect(result.toolCalls).toHaveLength(1);
   });
 
-  it('把工具结果以 tool 角色回灌，并带回原始 toolCallId', async () => {
+  it('把工具结果以 tool 角色回灌，toolCallId 与 assistant 声明的调用一一对应', async () => {
     const { definition } = addTool();
     const tools = new ToolRegistry().register(definition);
     const model = new FakeChatModel([
@@ -43,16 +43,35 @@ describe('AgentLoop（自研 ReAct 循环）', () => {
     await new AgentLoop({ model, tools }).run('算一下');
 
     const secondRequest = model.calls[1];
-    const toolMessage = secondRequest?.messages.find((m) => m.role === 'tool');
-    expect(toolMessage).toMatchObject({
-      role: 'tool',
-      toolCallId: 'call_abc',
-      name: 'add',
-      content: '5',
-    });
     // assistant 发起的调用也要留在轨迹里，否则后续请求结构非法
     const assistantMessage = secondRequest?.messages.find((m) => m.role === 'assistant');
     expect(assistantMessage?.toolCalls).toHaveLength(1);
+
+    const toolMessage = secondRequest?.messages.find((m) => m.role === 'tool');
+    const declaredId = assistantMessage?.toolCalls?.[0]?.id;
+    expect(toolMessage).toMatchObject({
+      role: 'tool',
+      toolCallId: declaredId,
+      name: 'add',
+      content: '5',
+    });
+  });
+
+  it('调用 id 由工具名与参数确定性推导，不随模型给的随机 id 变化', async () => {
+    const { definition } = addTool();
+    const tools = new ToolRegistry().register(definition);
+
+    const idsOf = async (modelId: string) => {
+      const model = new FakeChatModel([toolTurn('add', { a: 2, b: 3 }, modelId), answerTurn('5')]);
+      const result = await new AgentLoop({ model, tools }).run('算一下');
+      return result.toolCalls.map((call) => call.id);
+    };
+
+    const first = await idsOf('call_random_a');
+    const second = await idsOf('call_random_b');
+
+    expect(first).toEqual(second);
+    expect(first[0]).toContain('add');
   });
 
   it('每次请求都带上 system prompt 与工具声明', async () => {

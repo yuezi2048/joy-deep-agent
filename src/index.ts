@@ -5,13 +5,16 @@ export * from './core/errors.js';
 export {
   AgentLoop,
   DEFAULT_SYSTEM_PROMPT,
+  type AgentCheckpointState,
   type AgentEvent,
   type AgentLoopDeps,
   type AgentLoopOptions,
   type AgentRunResult,
+  type CheckpointOptions,
   type StopReason,
 } from './core/agent-loop.js';
 export { AsyncQueue } from './core/async-queue.js';
+export { deterministicToolCallId, stableStringify, toolCallKey } from './core/stable-key.js';
 
 export { ToolRegistry } from './tools/registry.js';
 export { parseToolArguments, type ParsedArguments } from './tools/arguments.js';
@@ -27,5 +30,6 @@ export {
 
 export { PathGuard } from './security/path-guard.js';
 
+export * from './memory/index.js';
 export * from './providers/index.js';
 export * from './robust/index.js';

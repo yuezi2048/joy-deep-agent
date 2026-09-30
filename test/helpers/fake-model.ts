@@ -57,3 +57,20 @@ export function toolTurn(name: string, args: Record<string, unknown>, id = 'call
 export function answerTurn(content: string): ChatResponse {
   return { content, toolCalls: [], finishReason: 'stop' };
 }
+
+/** 一轮里同时发起多个工具调用，用来验证「一组调用执行到一半被打断」这类场景。 */
+export function multiToolTurn(
+  calls: ReadonlyArray<{ name: string; args: Record<string, unknown> }>,
+  idPrefix = 'call',
+): ChatResponse {
+  return {
+    content: '',
+    toolCalls: calls.map((item, index) => ({
+      id: `${idPrefix}_${index}`,
+      name: item.name,
+      arguments: item.args,
+      rawArguments: JSON.stringify(item.args),
+    })),
+    finishReason: 'tool_calls',
+  };
+}
