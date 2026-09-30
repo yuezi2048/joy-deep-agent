@@ -1,5 +1,5 @@
 import { errorMessage } from '../core/errors.js';
-import type { ChatMessage } from '../core/types.js';
+import type { ChatMessage, Usage } from '../core/types.js';
 import type { ChatModel } from '../providers/chat-model.js';
 import { parseToolArguments } from '../tools/arguments.js';
 
@@ -21,6 +21,8 @@ export interface SelfCheckVerdict {
   degraded: boolean;
   /** 降级原因，写进结果里便于排查 */
   degradedReason?: string;
+  /** 核查这次调用消耗的 token；主循环把它并进本次运行的总账（口径要求：加固开销要算进去） */
+  usage?: Usage;
 }
 
 export interface SelfCheckInput {
@@ -76,9 +78,11 @@ export class SelfChecker {
     };
 
     let raw: string;
+    let usage: Usage | undefined;
     try {
       const response = await this.model.chat(request);
       raw = response.content;
+      usage = response.usage;
     } catch (error) {
       return {
         ok: true,
@@ -96,9 +100,10 @@ export class SelfChecker {
         issues: [],
         degraded: true,
         degradedReason: `核查器没有给出可用结论（输出不是 {ok, issues} JSON）：${raw.slice(0, 80)}`,
+        ...(usage ? { usage } : {}),
       };
     }
-    if (ok) return { ok: true, issues: [], degraded: false };
+    if (ok) return { ok: true, issues: [], degraded: false, ...(usage ? { usage } : {}) };
 
     const issues = Array.isArray(parsed.value.issues)
       ? parsed.value.issues.filter((issue): issue is string => typeof issue === 'string')
@@ -107,6 +112,7 @@ export class SelfChecker {
       ok: false,
       issues: issues.length > 0 ? issues : ['核查未通过，但没有说明具体问题，请复核关键结论是否有观测支撑'],
       degraded: false,
+      ...(usage ? { usage } : {}),
     };
   }
 

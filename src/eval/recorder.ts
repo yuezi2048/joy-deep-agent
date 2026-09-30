@@ -96,36 +96,48 @@ export class RunRecorder {
   };
 
   /** 中途快照（不结束本次运行），便于边跑边看。 */
-  snapshot(stopReason: AgentRunResult['stopReason'] = 'completed'): RunObservation {
+  snapshot(stopReason?: AgentRunResult['stopReason']): RunObservation {
     return {
       scenario: this.scenario,
       variant: this.variant,
       passed: false,
-      stopReason,
-      faults: this.allFaults(stopReason),
+      ...(stopReason ? { stopReason } : {}),
+      faults: this.allFaults(false),
+    };
+  }
+
+  /** 运行抛异常退出：没有交付物，四个指标里凡是「测不出来」的一律留空。 */
+  finishErrored(message: string): RunObservation {
+    return {
+      scenario: this.scenario,
+      variant: this.variant,
+      passed: false,
+      errored: message,
+      faults: this.allFaults(false),
     };
   }
 
   finish(result: AgentRunResult): RunObservation {
+    const passed = this.judge(result);
     return {
       scenario: this.scenario,
       variant: this.variant,
-      passed: this.judge(result),
+      passed,
       stopReason: result.stopReason,
       usage: result.usage,
-      faults: this.allFaults(result.stopReason),
+      faults: this.allFaults(passed),
     };
   }
 
   /**
-   * 没有被显式标记恢复的故障，按「任务有没有跑完」判定是否被吸收：
-   * 任务是完成的，说明这个故障没有终止任务（哪怕是模型绕过去的）。
+   * 没有被显式标记恢复的故障，按「任务最终有没有达成」判定是否被吸收。
+   *
+   * 为什么不只看 `stopReason === 'completed'`：循环「正常结束」不等于任务成功。
+   * 模型完全可以带着失败的观测给一句「我拿不到数据」然后正常收尾——故障并没有被吸收，
+   * 它正是任务失败的原因。所以这里用场景断言（`passed`）做判据（口径见 docs/eval/metrics.md）。
    */
-  private allFaults(stopReason: AgentRunResult['stopReason']): FaultObservation[] {
-    const stillOpen = this.open.map((fault) => ({
-      ...fault,
-      absorbed: stopReason === 'completed',
-    }));
+  private allFaults(taskSucceeded: boolean): FaultObservation[] {
+    const stillOpen = this.open.map((fault) => ({ ...fault, absorbed: taskSucceeded }));
     return [...this.closed, ...stillOpen];
   }
 }

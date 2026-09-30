@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "eval": "tsx src/eval/run.ts",
     "demo": "tsx src/cli.ts",
     "start": "tsx src/main.ts",
     "start:dev": "tsx watch src/main.ts"

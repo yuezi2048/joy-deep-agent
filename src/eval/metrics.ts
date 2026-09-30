@@ -52,7 +52,10 @@ export interface RunObservation {
   variant: EvalVariant;
   /** 场景预先声明的断言结果，不看人 */
   passed: boolean;
-  stopReason: StopReason;
+  /** 运行没有正常结束时时为空——没有停止原因，因为它压根没停 */
+  stopReason?: StopReason;
+  /** 抛异常退出时的错误信息（未产出交付物） */
+  errored?: string;
   usage?: Usage;
   faults?: readonly FaultObservation[];
 }
@@ -66,6 +69,8 @@ export interface DurationStats {
 export interface VariantMetrics {
   runs: number;
   completed: number;
+  /** 异常退出（未产出交付物）的次数：基线常见，加固不该有 */
+  errored: number;
   completionRate: number | null;
   faultsInjected: number;
   faultsAbsorbed: number;
@@ -127,6 +132,7 @@ export function summarizeRuns(runs: readonly RunObservation[]): VariantMetrics {
   return {
     runs: runs.length,
     completed,
+    errored: runs.filter((item) => item.errored !== undefined).length,
     completionRate: runs.length > 0 ? round2(completed / runs.length) : null,
     faultsInjected: faults.length,
     faultsAbsorbed: absorbed.length,
@@ -254,6 +260,10 @@ export function renderMarkdownReport(
     lines.push(
       `| token 均值（样本数） | ${formatTokens(summary.baseline)} | ${formatTokens(summary.hardened)} ` +
         `| ${formatPercent(summary.delta.meanTokensPercent)} |`,
+    );
+    lines.push(
+      `| 异常退出（未产出交付物） | ${summary.baseline.errored}/${summary.baseline.runs} ` +
+        `| ${summary.hardened.errored}/${summary.hardened.runs} | — |`,
     );
     lines.push('');
   }

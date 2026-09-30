@@ -15,7 +15,8 @@
 pnpm install
 cp .env.example .env        # 至少填一个供应商的 Key
 
-pnpm test                   # 197 个单测，全部走假模型，不烧 API
+pnpm test                   # 233 个单测，全部走假模型，不烧 API
+pnpm eval                   # 跑故障注入评测，输出 docs/eval/report-<日期>.md
 pnpm start                  # 起 Harness：http://localhost:3000
 pnpm run demo               # 或直接进命令行 REPL
 ```
@@ -36,7 +37,7 @@ curl -N "localhost:3000/agent/stream?input=算一下%20(2%2B3)*4"
 | 供应商故障转移（熔断 + 按优先级自动切换，对主循环透明） | `src/providers/failover-model.ts` | **已实现**，含单测 |
 | 幻觉防护（来源约束 + 交付前自我核查，默认关） | `src/robust/citation-guard.ts`、`src/robust/self-check.ts` | **已实现**，含单测 |
 | 工具依赖顺序 + 启动环境预检 | `src/tools/registry.ts`、`src/security/preflight.ts` | **已实现**，含单测 |
-| 评测指标口径与报告格式 | `docs/eval/`、`src/eval/` | **已实现**（口径文档 + 采集器 + 报告渲染）；场景库与执行见 #8 |
+| 评测指标口径与报告格式 | `docs/eval/`、`src/eval/` | **已实现**（口径文档 + 采集器 + 报告渲染） |
 | 死循环治理（步数上限 / 无进展指纹 / 横跳检测 / 墙钟上限） | `src/core/agent-loop.ts` | **已实现**，含单测 |
 | HITL 高风险操作确认 | `src/core/agent-loop.ts` | **已实现**，含单测 |
 | NestJS 服务化 + SSE 流式接口 | `src/nest/`、`src/main.ts` | **已实现**，含单测 |
@@ -45,10 +46,28 @@ curl -N "localhost:3000/agent/stream?input=算一下%20(2%2B3)*4"
 | Skill 热插拔、VFS 沙箱 | 待迁（原型 `deep-agent-demo`） | 未开始 |
 | MCP / A2A 接入 | 待迁（原型 `agent-protocols`） | 未开始 |
 | Planner / Memory | 待建 | 未开始 |
-| 故障注入评测（量化收益） | 待建 | **未开始** |
+| 故障注入评测（量化收益） | `src/eval/`、`docs/eval/report-*.md` | **已实现**：8 类故障 + 1 条无故障对照，入口 `pnpm eval` |
 | 协议 / 鲁棒性 / 基础 agent 原型 | `prototypes/` | 已冻结，只读 |
 
 `prototypes/` 是**只读的原始材料**（primary source）：保留现场，新实现从零写，不就地修改原型。
+
+## 故障注入评测
+
+`pnpm eval` 跑全部场景（8 类故障 + 1 条无故障对照），每场景每侧重复 5 次，输出
+`docs/eval/report-<日期>.md` 与同名 JSON。全部用进程内确定性假供应商，不联网、不烧 key。
+
+以未加固的裸循环为基线（同一场景、同一断言、同一模型、同样重复次数）：
+
+| 指标 | 基线 | 加固 | 差值 |
+| --- | --- | --- | --- |
+| 完成率 | 11%（5/45） | 100%（45/45） | +89pp |
+| 恢复成功率 | 0%（0/20） | 100%（20/20） | +100pp |
+| 异常退出（未产出交付物） | 10 | 0 | — |
+| token 均值（样本数） | 414（n=35） | 923（n=40） | +123% |
+
+加固不是免费的：完成率与恢复率的提升，对应 token 均值翻了一倍多（自我核查与重试/转移的重发都算在加固账上）。
+恢复时间按生产退避策略实测、不调参：S-01 限流重试 P50 = 501ms / 2 次尝试，S-06 供应商转移 P50 = 0ms / 2 次尝试。
+口径见 `docs/eval/metrics.md`，逐场景数据见 `docs/eval/report-2026-09-30.md`。
 
 ## 目录
 

@@ -470,6 +470,8 @@ export class AgentLoop {
       );
       degraded = verdict.degraded;
       degradedReason = verdict.degradedReason;
+      // 核查是加固自身的开销，口径要求算进本次运行的 token 总账
+      accumulateUsage(state.usage, verdict.usage);
       if (!verdict.ok) issues.push(...verdict.issues);
     }
 

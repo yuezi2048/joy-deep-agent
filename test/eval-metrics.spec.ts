@@ -296,6 +296,27 @@ describe('口径自查 · 四个指标都能从真实运行里测出来', () => 
     expect(observation.faults?.[0]?.absorbed).toBe(true);
   });
 
+  it('循环正常结束但断言不通过时，不算吸收：故障正是失败的原因', () => {
+    const recorder = new RunRecorder({
+      scenario: 'S-06',
+      variant: 'baseline',
+      judge: () => false,
+    });
+    recorder.injectFault(FAULT_CATEGORIES.userInterrupt, 0);
+
+    const observation = recorder.finish({
+      content: '我拿不到数据',
+      steps: 2,
+      stopReason: 'completed',
+      messages: [],
+      toolCalls: [],
+      usage: { totalTokens: 10 },
+    });
+
+    expect(observation.stopReason).toBe('completed');
+    expect(observation.faults?.[0]?.absorbed).toBe(false);
+  });
+
   it('重试适配器数尝试次数，工具恢复适配器收口', () => {
     let clock = 0;
     const recorder = new RunRecorder({ scenario: 'S-04', variant: 'hardened', now: () => clock });

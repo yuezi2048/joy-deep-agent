@@ -1,0 +1,424 @@
+{
+  "meta": {
+    "generatedAt": "2026-09-30T12:24:40.719Z",
+    "notes": [
+      "退避：initialDelayMs=500、backoffFactor=2、maxDelayMs=15000、maxRetries=3（生产值，未调整）",
+      "模型：进程内确定性假供应商（ScriptedModel），无网络、不烧 key；token 按本项目字符权重口径估算",
+      "每场景每变体重复 5 次；基线 = 裸循环（不装中间件、单供应商、无检查点、无关卡），加固 = docs/eval/metrics.md 第三节的全套",
+      "供应商故障转移的恢复时间是进程内模拟，不含真实网络超时；工具重试的恢复时间包含真实退避等待",
+      "「异常退出」= 运行抛异常、没产出交付物；这类样本没有 usage，token 均值不计入，样本数见括号",
+      "恢复率只有「注入时刻可观测」的类别才有：失败调用 / 供应商故障 / 用户中断 / 终端异常有，幻觉 / 工具误用 / 死循环 / 上下文溢出一律记 —（拦截式防护，没有恢复时间可言）",
+      "C-01 是无故障对照组：两侧都必须完成，用来验证「基线失败」是故障造成的，而不是评测本身对基线不友好"
+    ]
+  },
+  "scenarios": [
+    {
+      "scenario": "C-01 无故障对照",
+      "baseline": {
+        "runs": 5,
+        "completed": 5,
+        "errored": 0,
+        "completionRate": 1,
+        "faultsInjected": 0,
+        "faultsAbsorbed": 0,
+        "recoveryRate": null,
+        "recoveryMs": null,
+        "recoveryAttempts": null,
+        "usageSamples": 5,
+        "totalTokens": 915,
+        "meanTokens": 183
+      },
+      "hardened": {
+        "runs": 5,
+        "completed": 5,
+        "errored": 0,
+        "completionRate": 1,
+        "faultsInjected": 0,
+        "faultsAbsorbed": 0,
+        "recoveryRate": null,
+        "recoveryMs": null,
+        "recoveryAttempts": null,
+        "usageSamples": 5,
+        "totalTokens": 3455,
+        "meanTokens": 691
+      },
+      "delta": {
+        "completionRatePp": 0,
+        "recoveryRatePp": null,
+        "meanTokensPercent": 278
+      },
+      "gaps": []
+    },
+    {
+      "scenario": "S-01 工具首次限流",
+      "baseline": {
+        "runs": 5,
+        "completed": 0,
+        "errored": 0,
+        "completionRate": 0,
+        "faultsInjected": 5,
+        "faultsAbsorbed": 0,
+        "recoveryRate": 0,
+        "recoveryMs": null,
+        "recoveryAttempts": null,
+        "usageSamples": 5,
+        "totalTokens": 1090,
+        "meanTokens": 218
+      },
+      "hardened": {
+        "runs": 5,
+        "completed": 5,
+        "errored": 0,
+        "completionRate": 1,
+        "faultsInjected": 5,
+        "faultsAbsorbed": 5,
+        "recoveryRate": 1,
+        "recoveryMs": {
+          "samples": 5,
+          "p50": 501,
+          "max": 501
+        },
+        "recoveryAttempts": {
+          "samples": 5,
+          "p50": 2,
+          "max": 2
+        },
+        "usageSamples": 5,
+        "totalTokens": 3570,
+        "meanTokens": 714
+      },
+      "delta": {
+        "completionRatePp": 100,
+        "recoveryRatePp": 100,
+        "meanTokensPercent": 228
+      },
+      "gaps": []
+    },
+    {
+      "scenario": "S-02 编造来源",
+      "baseline": {
+        "runs": 5,
+        "completed": 0,
+        "errored": 0,
+        "completionRate": 0,
+        "faultsInjected": 0,
+        "faultsAbsorbed": 0,
+        "recoveryRate": null,
+        "recoveryMs": null,
+        "recoveryAttempts": null,
+        "usageSamples": 5,
+        "totalTokens": 1070,
+        "meanTokens": 214
+      },
+      "hardened": {
+        "runs": 5,
+        "completed": 5,
+        "errored": 0,
+        "completionRate": 1,
+        "faultsInjected": 0,
+        "faultsAbsorbed": 0,
+        "recoveryRate": null,
+        "recoveryMs": null,
+        "recoveryAttempts": null,
+        "usageSamples": 5,
+        "totalTokens": 7670,
+        "meanTokens": 1534
+      },
+      "delta": {
+        "completionRatePp": 100,
+        "recoveryRatePp": null,
+        "meanTokensPercent": 617
+      },
+      "gaps": []
+    },
+    {
+      "scenario": "S-03 重复调用",
+      "baseline": {
+        "runs": 5,
+        "completed": 0,
+        "errored": 0,
+        "completionRate": 0,
+        "faultsInjected": 0,
+        "faultsAbsorbed": 0,
+        "recoveryRate": null,
+        "recoveryMs": null,
+        "recoveryAttempts": null,
+        "usageSamples": 5,
+        "totalTokens": 1875,
+        "meanTokens": 375
+      },
+      "hardened": {
+        "runs": 5,
+        "completed": 5,
+        "errored": 0,
+        "completionRate": 1,
+        "faultsInjected": 0,
+        "faultsAbsorbed": 0,
+        "recoveryRate": null,
+        "recoveryMs": null,
+        "recoveryAttempts": null,
+        "usageSamples": 5,
+        "totalTokens": 5735,
+        "meanTokens": 1147
+      },
+      "delta": {
+        "completionRatePp": 100,
+        "recoveryRatePp": null,
+        "meanTokensPercent": 206
+      },
+      "gaps": []
+    },
+    {
+      "scenario": "S-04 两工具横跳",
+      "baseline": {
+        "runs": 5,
+        "completed": 0,
+        "errored": 0,
+        "completionRate": 0,
+        "faultsInjected": 0,
+        "faultsAbsorbed": 0,
+        "recoveryRate": null,
+        "recoveryMs": null,
+        "recoveryAttempts": null,
+        "usageSamples": 5,
+        "totalTokens": 7140,
+        "meanTokens": 1428
+      },
+      "hardened": {
+        "runs": 5,
+        "completed": 5,
+        "errored": 0,
+        "completionRate": 1,
+        "faultsInjected": 0,
+        "faultsAbsorbed": 0,
+        "recoveryRate": null,
+        "recoveryMs": null,
+        "recoveryAttempts": null,
+        "usageSamples": 5,
+        "totalTokens": 4685,
+        "meanTokens": 937
+      },
+      "delta": {
+        "completionRatePp": 100,
+        "recoveryRatePp": null,
+        "meanTokensPercent": -34
+      },
+      "gaps": []
+    },
+    {
+      "scenario": "S-05 观测撑爆上下文",
+      "baseline": {
+        "runs": 5,
+        "completed": 0,
+        "errored": 5,
+        "completionRate": 0,
+        "faultsInjected": 0,
+        "faultsAbsorbed": 0,
+        "recoveryRate": null,
+        "recoveryMs": null,
+        "recoveryAttempts": null,
+        "usageSamples": 0,
+        "totalTokens": 0,
+        "meanTokens": null
+      },
+      "hardened": {
+        "runs": 5,
+        "completed": 5,
+        "errored": 0,
+        "completionRate": 1,
+        "faultsInjected": 0,
+        "faultsAbsorbed": 0,
+        "recoveryRate": null,
+        "recoveryMs": null,
+        "recoveryAttempts": null,
+        "usageSamples": 5,
+        "totalTokens": 5395,
+        "meanTokens": 1079
+      },
+      "delta": {
+        "completionRatePp": 100,
+        "recoveryRatePp": null,
+        "meanTokensPercent": null
+      },
+      "gaps": []
+    },
+    {
+      "scenario": "S-06 主供应商 502",
+      "baseline": {
+        "runs": 5,
+        "completed": 0,
+        "errored": 5,
+        "completionRate": 0,
+        "faultsInjected": 5,
+        "faultsAbsorbed": 0,
+        "recoveryRate": 0,
+        "recoveryMs": null,
+        "recoveryAttempts": null,
+        "usageSamples": 0,
+        "totalTokens": 0,
+        "meanTokens": null
+      },
+      "hardened": {
+        "runs": 5,
+        "completed": 5,
+        "errored": 0,
+        "completionRate": 1,
+        "faultsInjected": 5,
+        "faultsAbsorbed": 5,
+        "recoveryRate": 1,
+        "recoveryMs": {
+          "samples": 5,
+          "p50": 0,
+          "max": 0
+        },
+        "recoveryAttempts": {
+          "samples": 5,
+          "p50": 2,
+          "max": 2
+        },
+        "usageSamples": 5,
+        "totalTokens": 2530,
+        "meanTokens": 506
+      },
+      "delta": {
+        "completionRatePp": 100,
+        "recoveryRatePp": 100,
+        "meanTokensPercent": null
+      },
+      "gaps": []
+    },
+    {
+      "scenario": "S-07 中断后续跑",
+      "baseline": {
+        "runs": 5,
+        "completed": 0,
+        "errored": 0,
+        "completionRate": 0,
+        "faultsInjected": 5,
+        "faultsAbsorbed": 0,
+        "recoveryRate": 0,
+        "recoveryMs": null,
+        "recoveryAttempts": null,
+        "usageSamples": 5,
+        "totalTokens": 1135,
+        "meanTokens": 227
+      },
+      "hardened": {
+        "runs": 5,
+        "completed": 5,
+        "errored": 0,
+        "completionRate": 1,
+        "faultsInjected": 5,
+        "faultsAbsorbed": 5,
+        "recoveryRate": 1,
+        "recoveryMs": {
+          "samples": 5,
+          "p50": 0,
+          "max": 1
+        },
+        "recoveryAttempts": {
+          "samples": 5,
+          "p50": 1,
+          "max": 1
+        },
+        "usageSamples": 5,
+        "totalTokens": 3880,
+        "meanTokens": 776
+      },
+      "delta": {
+        "completionRatePp": 100,
+        "recoveryRatePp": 100,
+        "meanTokensPercent": 242
+      },
+      "gaps": []
+    },
+    {
+      "scenario": "S-08 工作区不可写",
+      "baseline": {
+        "runs": 5,
+        "completed": 0,
+        "errored": 0,
+        "completionRate": 0,
+        "faultsInjected": 5,
+        "faultsAbsorbed": 0,
+        "recoveryRate": 0,
+        "recoveryMs": null,
+        "recoveryAttempts": null,
+        "usageSamples": 5,
+        "totalTokens": 1255,
+        "meanTokens": 251
+      },
+      "hardened": {
+        "runs": 5,
+        "completed": 5,
+        "errored": 0,
+        "completionRate": 1,
+        "faultsInjected": 5,
+        "faultsAbsorbed": 5,
+        "recoveryRate": 1,
+        "recoveryMs": {
+          "samples": 5,
+          "p50": 0,
+          "max": 1
+        },
+        "recoveryAttempts": {
+          "samples": 5,
+          "p50": 1,
+          "max": 1
+        },
+        "usageSamples": 0,
+        "totalTokens": 0,
+        "meanTokens": null
+      },
+      "delta": {
+        "completionRatePp": 100,
+        "recoveryRatePp": 100,
+        "meanTokensPercent": null
+      },
+      "gaps": []
+    }
+  ],
+  "overall": {
+    "baseline": {
+      "runs": 45,
+      "completed": 5,
+      "errored": 10,
+      "completionRate": 0.11,
+      "faultsInjected": 20,
+      "faultsAbsorbed": 0,
+      "recoveryRate": 0,
+      "recoveryMs": null,
+      "recoveryAttempts": null,
+      "usageSamples": 35,
+      "totalTokens": 14480,
+      "meanTokens": 414
+    },
+    "hardened": {
+      "runs": 45,
+      "completed": 45,
+      "errored": 0,
+      "completionRate": 1,
+      "faultsInjected": 20,
+      "faultsAbsorbed": 20,
+      "recoveryRate": 1,
+      "recoveryMs": {
+        "samples": 20,
+        "p50": 0,
+        "max": 501
+      },
+      "recoveryAttempts": {
+        "samples": 20,
+        "p50": 1,
+        "max": 2
+      },
+      "usageSamples": 40,
+      "totalTokens": 36920,
+      "meanTokens": 923
+    },
+    "delta": {
+      "completionRatePp": 89,
+      "recoveryRatePp": 100,
+      "meanTokensPercent": 123
+    }
+  }
+}
