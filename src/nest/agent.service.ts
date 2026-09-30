@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { AgentLoop, type AgentEvent, type AgentRunResult } from '../core/agent-loop.js';
+import type { ProviderState } from '../providers/index.js';
 import type { AgentRuntime } from './runtime.js';
 
 export const AGENT_RUNTIME = Symbol('AGENT_RUNTIME');
@@ -9,6 +10,8 @@ export interface RuntimeInfo {
   model: string;
   tools: string[];
   sessions: number;
+  /** 故障转移下每个供应商的熔断状态；只有一家供应商时为空数组 */
+  providers: ProviderState[];
 }
 
 /**
@@ -27,6 +30,7 @@ export class AgentService {
       model: this.runtime.model.model,
       tools: this.runtime.tools.names(),
       sessions: this.sessions.size,
+      providers: this.runtime.providerStates?.() ?? [],
     };
   }
 

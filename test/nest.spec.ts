@@ -29,6 +29,7 @@ describe('AgentService（服务化外壳）', () => {
       model: 'fake-1',
       tools: ['ping'],
       sessions: 0,
+      providers: [],
     });
   });
 

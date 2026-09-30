@@ -1,8 +1,10 @@
 import { Body, Controller, Get, HttpException, HttpStatus, Post, Query, Sse } from '@nestjs/common';
 import type { MessageEvent } from '@nestjs/common';
-import { from, map, type Observable } from 'rxjs';
+import { catchError, from, map, of, type Observable } from 'rxjs';
 import { AgentService, type RuntimeInfo } from './agent.service.js';
-import type { AgentEvent } from '../core/agent-loop.js';
+import type { AgentEvent, AgentRunResult } from '../core/agent-loop.js';
+import { errorMessage } from '../core/errors.js';
+import { AllProvidersFailedError } from '../providers/index.js';
 
 interface RunRequest {
   input?: string;
@@ -26,7 +28,12 @@ export class AgentController {
     if (!input) {
       throw new HttpException('input 不能为空', HttpStatus.BAD_REQUEST);
     }
-    const result = await this.agent.run(input, body?.sessionId ?? 'default');
+    let result: AgentRunResult;
+    try {
+      result = await this.agent.run(input, body?.sessionId ?? 'default');
+    } catch (error) {
+      throw toHttpError(error);
+    }
     return {
       content: result.content,
       stopReason: result.stopReason,
@@ -53,6 +60,21 @@ export class AgentController {
     }
     return from(this.agent.stream(task, sessionId)).pipe(
       map((event: AgentEvent) => ({ type: event.type, data: event }) as MessageEvent),
+      // 失败也要发一条可读的事件再收尾，别让前端只看到连接断掉
+      catchError((error: unknown) =>
+        of({ type: 'error', data: { message: errorMessage(error) } } as MessageEvent),
+      ),
     );
   }
+}
+
+/** 供应商全挂是可预期的外部故障，回 503 并带上逐条原因；其余错误也别把信息吞掉。 */
+function toHttpError(error: unknown): HttpException {
+  if (error instanceof AllProvidersFailedError) {
+    return new HttpException(
+      { message: error.message, attempts: error.attempts },
+      HttpStatus.SERVICE_UNAVAILABLE,
+    );
+  }
+  return new HttpException(errorMessage(error), HttpStatus.INTERNAL_SERVER_ERROR);
 }

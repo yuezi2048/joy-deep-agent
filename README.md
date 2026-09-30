@@ -15,7 +15,7 @@
 pnpm install
 cp .env.example .env        # 至少填一个供应商的 Key
 
-pnpm test                   # 120 个单测，全部走假模型，不烧 API
+pnpm test                   # 132 个单测，全部走假模型，不烧 API
 pnpm start                  # 起 Harness：http://localhost:3000
 pnpm run demo               # 或直接进命令行 REPL
 ```
@@ -33,6 +33,7 @@ curl -N "localhost:3000/agent/stream?input=算一下%20(2%2B3)*4"
 | 工具注册表与 schema 校验 | `src/tools/registry.ts` | **已实现**，含单测 |
 | 模型供应商抽象（DeepSeek / OpenAI / 通义千问 / Ollama 零改动切换） | `src/providers/` | **已实现**，含单测 |
 | 鲁棒性中间件：失败调用 / 工具误用 / 供应商故障 / 终端异常 | `src/robust/`、`src/tools/builtin/` | **已实现**，含单测 |
+| 供应商故障转移（熔断 + 按优先级自动切换，对主循环透明） | `src/providers/failover-model.ts` | **已实现**，含单测 |
 | 死循环治理（步数上限 + 无进展指纹） | `src/core/agent-loop.ts` | **已实现**，含单测 |
 | HITL 高风险操作确认 | `src/core/agent-loop.ts` | **已实现**，含单测 |
 | NestJS 服务化 + SSE 流式接口 | `src/nest/`、`src/main.ts` | **已实现**，含单测 |

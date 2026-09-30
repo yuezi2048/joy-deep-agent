@@ -28,14 +28,21 @@ export class CircuitBreaker {
   }
 
   canRequest(): boolean {
-    if (this.state === 'closed') return true;
-    if (this.state === 'open') {
-      if (this.now() - this.lastFailureAt >= this.resetTimeoutMs) {
-        this.state = 'half-open';
-        return true;
-      }
-      return false;
+    if (this.state === 'closed' || this.state === 'half-open') return true;
+    // open：到点了就放一个请求进去探路
+    if (this.isAvailable()) {
+      this.state = 'half-open';
+      return true;
     }
+    return false;
+  }
+
+  /**
+   * 只读探测：现在发请求会不会被短路。
+   * 与 `canRequest()` 的区别是**不改变状态**——查询熔断状态不该顺手放一个探路请求进去。
+   */
+  isAvailable(): boolean {
+    if (this.state === 'open') return this.now() - this.lastFailureAt >= this.resetTimeoutMs;
     return true;
   }
 

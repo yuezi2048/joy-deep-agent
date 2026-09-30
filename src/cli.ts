@@ -6,16 +6,23 @@ import 'dotenv/config';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { AgentLoop } from './core/agent-loop.js';
-import { buildProviders, createChatModel, selectProvider } from './providers/index.js';
+import { buildProviders, createFailoverModel, formatFailoverEvent } from './providers/index.js';
 import { applyDefaultToolMiddleware } from './robust/index.js';
 import { createBuiltinTools } from './tools/builtin/index.js';
 import { ToolRegistry } from './tools/registry.js';
 
 async function main(): Promise<void> {
-  const provider = selectProvider(buildProviders(), process.env.AGENT_PROVIDER);
-  const model = createChatModel(provider, {
+  // 多家供应商按 priority 兜底：主供应商挂了自动换下一家，主循环无感
+  const model = createFailoverModel(buildProviders(), {
+    primaryKey: process.env.AGENT_PROVIDER,
     temperature: Number(process.env.AGENT_TEMPERATURE ?? 0.3),
     maxTokens: Number(process.env.AGENT_MAX_TOKENS ?? 4096),
+    failover: {
+      onEvent: (event) => {
+        const line = formatFailoverEvent(event);
+        if (line) console.warn(`⚠️  ${line}`);
+      },
+    },
   });
 
   // 整个进程只建这一个 readline：HITL 确认与 REPL 输入共用它。
@@ -41,7 +48,7 @@ async function main(): Promise<void> {
     },
   });
 
-  console.log(`🤖 ${provider.name} · ${provider.model}`);
+  console.log(`🤖 ${model.name} · ${model.model}`);
   console.log(`🔧 工具：${tools.names().join(', ')}`);
   console.log('输入任务开始，/reset 清空上下文，/exit 退出。\n');
 

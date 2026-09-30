@@ -1,5 +1,11 @@
 import type { ChatModel } from '../providers/chat-model.js';
-import { buildProviders, createChatModel, selectProvider } from '../providers/index.js';
+import {
+  FailoverChatModel,
+  buildProviders,
+  createFailoverModel,
+  formatFailoverEvent,
+  type ProviderState,
+} from '../providers/index.js';
 import { applyDefaultToolMiddleware, withContextBudget } from '../robust/index.js';
 import { createBuiltinTools } from '../tools/builtin/index.js';
 import { ToolRegistry } from '../tools/registry.js';
@@ -8,6 +14,8 @@ import { ToolRegistry } from '../tools/registry.js';
 export interface AgentRuntime {
   model: ChatModel;
   tools: ToolRegistry;
+  /** 故障转移下可查每个供应商的熔断状态；只有一家供应商时为 undefined */
+  providerStates?: () => ProviderState[];
 }
 
 export interface AgentRuntimeOptions {
@@ -15,6 +23,8 @@ export interface AgentRuntimeOptions {
   providerKey?: string;
   allowedCommands?: readonly string[];
   commandTimeoutMs?: number;
+  /** 转移过程打印到控制台（默认开）。测试里关掉以免污染输出。 */
+  logFailover?: boolean;
 }
 
 /**
@@ -23,15 +33,29 @@ export interface AgentRuntimeOptions {
  */
 export function createAgentRuntime(options: AgentRuntimeOptions = {}): AgentRuntime {
   const env = process.env;
-  const provider = selectProvider(buildProviders(), options.providerKey ?? env.AGENT_PROVIDER);
+  const providers = buildProviders();
+  const logFailover = options.logFailover ?? true;
 
-  const baseModel = createChatModel(provider, {
+  // 主供应商打头，其余按 priority 兜底；转移对 AgentLoop 透明
+  const routed = createFailoverModel(providers, {
+    primaryKey: options.providerKey ?? env.AGENT_PROVIDER,
     temperature: Number(env.AGENT_TEMPERATURE ?? 0.3),
     maxTokens: Number(env.AGENT_MAX_TOKENS ?? 4096),
+    failover: logFailover
+      ? {
+          onEvent: (event) => {
+            const line = formatFailoverEvent(event);
+            if (line) console.warn(`[model] ${line}`);
+          },
+        }
+      : undefined,
   });
 
+  const providerStates =
+    routed instanceof FailoverChatModel ? () => routed.states() : undefined;
+
   // 上下文预算层包在模型外层：轨迹在 AgentLoop 里保持完整，收缩的只是发给模型的视图
-  const model = withContextBudget(baseModel, {
+  const model = withContextBudget(routed, {
     maxTokens: Number(env.AGENT_CONTEXT_TOKENS ?? 32_000),
     maxToolResultTokens: Number(env.AGENT_TOOL_RESULT_TOKENS ?? 2_000),
   });
@@ -45,5 +69,5 @@ export function createAgentRuntime(options: AgentRuntimeOptions = {}): AgentRunt
   const tools = new ToolRegistry().registerAll(builtin);
   applyDefaultToolMiddleware(tools, { timeoutMs: options.commandTimeoutMs ?? 30_000 });
 
-  return { model, tools };
+  return { model, tools, providerStates };
 }
